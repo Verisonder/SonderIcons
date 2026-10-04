@@ -155,12 +155,12 @@ object GlyphEngine {
      * glyph size). Specks outside the main shape are ignored when sizing.
      */
     fun render(m: FloatArray, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning(), color: Int = Color.WHITE): Bitmap {
-        val xs = ArrayList<Int>(); val ys = ArrayList<Int>()
-        for (i in m.indices) if (m[i] > 0.16f) { xs += i % N; ys += i / N }
-        xs.sort(); ys.sort()
+        // Box around every real part of the glyph. Only tiny detached specks are left out:
+        // trimming a percentage instead cut the thin edges of shapes like a pointed heart.
+        val (x0r, y0r, x1r, y1r) = glyphBounds(m) ?: intArrayOf(0, 0, N, N).let { listOf(it[0], it[1], it[2], it[3]) }
         val pad = 4
-        val x0 = max(0, xs[xs.size / 100] - pad); val x1 = min(N, xs[xs.size * 99 / 100] + pad)
-        val y0 = max(0, ys[ys.size / 100] - pad); val y1 = min(N, ys[ys.size * 99 / 100] + pad)
+        val x0 = max(0, x0r - pad); val x1 = min(N, x1r + 1 + pad)
+        val y0 = max(0, y0r - pad); val y1 = min(N, y1r + 1 + pad)
         val w = max(1, x1 - x0); val h = max(1, y1 - y0)
         val crop = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val out = IntArray(w * h) { i ->
@@ -218,6 +218,41 @@ object GlyphEngine {
     }
 
     // ---------------- helpers ----------------
+
+    /** Bounds of the glyph without specks: blobs under 0.3% of its area that stand apart. */
+    private fun glyphBounds(m: FloatArray): List<Int>? {
+        val on = BooleanArray(m.size) { m[it] > 0.16f }
+        val total = on.count { it }
+        if (total == 0) return null
+        val label = IntArray(m.size) { -1 }
+        val sizes = ArrayList<Int>()
+        val stack = IntArray(m.size)
+        val dx = intArrayOf(1, -1, 0, 0, 1, 1, -1, -1); val dy = intArrayOf(0, 0, 1, -1, 1, -1, 1, -1)
+        for (i in on.indices) if (on[i] && label[i] < 0) {
+            val id = sizes.size; var sp = 0; var n = 0
+            stack[sp++] = i; label[i] = id
+            while (sp > 0) {
+                val c = stack[--sp]; n++
+                val x = c % N; val y = c / N
+                for (d in 0 until 8) {
+                    val nx = x + dx[d]; val ny = y + dy[d]
+                    if (nx !in 0 until N || ny !in 0 until N) continue
+                    val k = ny * N + nx
+                    if (on[k] && label[k] < 0) { label[k] = id; stack[sp++] = k }
+                }
+            }
+            sizes += n
+        }
+        val minSize = maxOf(20, (total * 0.003f).toInt())
+        var x0 = N; var y0 = N; var x1 = -1; var y1 = -1
+        for (i in on.indices) {
+            val l = label[i]
+            if (l < 0 || sizes[l] < minSize) continue
+            val x = i % N; val y = i / N
+            if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y
+        }
+        return if (x1 < 0) null else listOf(x0, y0, x1, y1)
+    }
 
     /**
      * Shrinks by halving until close, then one last step. A single bilinear resize from
