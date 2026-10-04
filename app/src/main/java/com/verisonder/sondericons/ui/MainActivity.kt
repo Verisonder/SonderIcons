@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -55,6 +56,7 @@ import com.verisonder.sondericons.Shape
 import com.verisonder.sondericons.IconPack
 import com.verisonder.sondericons.GlyphEngine
 import com.verisonder.sondericons.PinnedShortcuts
+import com.verisonder.sondericons.Backup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1238,6 +1240,29 @@ private fun SettingsSheet(ready: Boolean, onDismiss: () -> Unit, onScale: () -> 
                 Text("Build icons writes them into Theme backup. Applying Theme backup in Themes puts them on screen. " +
                     "Themes lists them as SonderIcons too; that entry can't be applied on its own.",
                     style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+            }
+            HorizontalDivider(color = Palette.Line)
+            var backupNote by remember { mutableStateOf<String?>(null) }
+            val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri: Uri? ->
+                uri?.let { backupNote = if (Backup.save(ctx, it)) "Backup saved." else "Couldn't save the backup." }
+            }
+            val loader = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+                uri?.let {
+                    val err = Backup.restore(ctx, it)
+                    if (err == null) (ctx as? android.app.Activity)?.recreate() else backupNote = err
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Backup", style = MaterialTheme.typography.bodyMedium)
+                Text("Your looks, every app's choices and your pictures, in one file. Restore replaces what's here now.",
+                    style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = { saver.launch("SonderIcons-backup.zip") }, modifier = Modifier.weight(1f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line)) { Text("Save backup", color = Palette.White) }
+                    OutlinedButton(onClick = { loader.launch(arrayOf("application/zip", "application/octet-stream")) }, modifier = Modifier.weight(1f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line)) { Text("Restore", color = Palette.White) }
+                }
+                backupNote?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Palette.Muted) }
             }
             HorizontalDivider(color = Palette.Line)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
