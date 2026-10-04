@@ -57,6 +57,13 @@ object Prefs {
     fun styleId(ctx: Context): String? = sp(ctx).getString("style", null)
     fun setStyleId(ctx: Context, id: String) = sp(ctx).edit().putString("style", id).apply()
 
+    fun customShape(ctx: Context): Shape = Shape.fromJson(sp(ctx).getString("customShape", null))
+    fun setCustomShape(ctx: Context, s: Shape) = sp(ctx).edit().putString("customShape", s.toJson()).apply()
+
+    /** Use a picked image whole, as a finished icon, instead of turning it into a glyph. */
+    fun asIs(ctx: Context, pkg: String) = sp(ctx).getBoolean("asis:$pkg", false)
+    fun setAsIs(ctx: Context, pkg: String, v: Boolean) = sp(ctx).edit().putBoolean("asis:$pkg", v).apply()
+
     fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "$pkg.png")
 
     /** This app's own icons resource id. Made once, then kept, so rebuilds replace in place. */

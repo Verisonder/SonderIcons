@@ -64,7 +64,7 @@ class Builder(private val ctx: Context) {
     class Unsupported(message: String) : Exception(message)
 
     /** The starting icon set for [style]. Throws [Unsupported] with a reason a person can act on. */
-    fun loadBase(theme: ThemeStore.Theme, style: Style = Style.byId(Prefs.styleId(ctx))): Base {
+    fun loadBase(theme: ThemeStore.Theme, style: Style = Style.byId(ctx, Prefs.styleId(ctx))): Base {
         val origId = originalIcons(theme)
         val entries = LinkedHashMap<String, ByteArray>()
         fun unzip(bytes: ByteArray) = ZipInputStream(ByteArrayInputStream(bytes)).use { z ->
@@ -74,21 +74,39 @@ class Builder(private val ctx: Context) {
             StyleKind.SET -> unzip(ctx.assets.open(style.asset!!).use { it.readBytes() })
             StyleKind.THEME -> unzip(origId?.let { ThemeStore.read("${ThemeStore.DATA}/content/icons/$it.mrc") }
                 ?: throw Unsupported("Couldn't read your theme's icons."))
-            StyleKind.DRAWN -> {}
+            StyleKind.DRAWN, StyleKind.PACK -> {}
         }
+        // an icon pack: its icon for every app it covers, drawn into the set at theme size
+        val pack = style.pack?.let { p -> IconPack.installed(ctx).firstOrNull { it.pkg == p } }
+        if (style.kind == StyleKind.PACK && pack == null) throw Unsupported("That icon pack isn't installed any more.")
         val dir = entries.keys.firstOrNull { it.endsWith("/icon_pattern.png") }?.substringBeforeLast('/')?.plus("/")
             ?: "res/drawable-xxhdpi/"
         val pattern: Bitmap = when (style.kind) {
             StyleKind.DRAWN -> style.pattern()
+            StyleKind.PACK -> pack!!.backs.firstNotNullOfOrNull { pack.bitmap(it) } ?: style.pattern()
             else -> entries[dir + "icon_pattern.png"]?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
                 ?: throw Unsupported("Your theme has no plain icon background to draw on. Pick another style.")
         }
-        // a drawn style ships its background too, so folders and anything uncovered match it
-        if (style.kind == StyleKind.DRAWN) entries[dir + "icon_pattern.png"] = png(pattern)
+        // drawn styles and packs ship their background too, so folders and anything uncovered match
+        if (style.kind == StyleKind.DRAWN || style.kind == StyleKind.PACK) entries[dir + "icon_pattern.png"] = png(pattern)
+        if (pack != null) {
+            val la = ctx.getSystemService(LauncherApps::class.java)
+            for (info in la.getActivityList(null, Process.myUserHandle())) {
+                val p = info.applicationInfo.packageName
+                val name = pack.covers(p, info.componentName.className) ?: continue
+                pack.bitmap(name, pattern.width)?.let { entries.putIfAbsent(dir + p + ".png", png(it)) }
+            }
+        }
         val themed = if (style.kind == StyleKind.DRAWN) emptySet()
             else entries.keys.filter { it.startsWith(dir) && it.endsWith(".png") && !it.substringAfterLast('/').startsWith("icon_") }
                 .map { it.removePrefix(dir).removeSuffix(".png") }.toSet()
         val glyph = when (style.kind) {
+            // on a pack's iconback: white or black, whichever reads on its centre
+            StyleKind.PACK -> if (pack!!.backs.isEmpty()) style.glyph else {
+                val c = pattern.getPixel(pattern.width / 2, pattern.height / 2)
+                val lum = 0.299 * android.graphics.Color.red(c) + 0.587 * android.graphics.Color.green(c) + 0.114 * android.graphics.Color.blue(c)
+                if (android.graphics.Color.alpha(c) > 128 && lum > 150) 0xFF1C1C1C.toInt() else android.graphics.Color.WHITE
+            }
             StyleKind.THEME -> StyleDetect.glyphColor(
                 themed.shuffled(java.util.Random(1)).take(60).mapNotNull { n ->
                     entries[dir + n + ".png"]?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
@@ -110,6 +128,7 @@ class Builder(private val ctx: Context) {
             Prefs.Mode.CUSTOM -> {
                 val f = Prefs.customFile(ctx, pkg)
                 val b = if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
+                if (b != null && Prefs.asIs(ctx, pkg)) return Result(whole(b, base.pattern.width), Kind.CUSTOM, "Your image, as it is")
                 val out = b?.let { GlyphEngine.fromImage(it, base.pattern, target, t, base.glyph) }
                 if (out != null) Result(out, Kind.CUSTOM, "Your image")
                 else Result(null, Kind.MISSING, "That image has no clear shape. Try one with a transparent background.")
@@ -223,6 +242,17 @@ class Builder(private val ctx: Context) {
         if (!ThemeStore.link(ctx, theme, orig)) return "Could not link the original icons"
         ThemeStore.restartThemes()
         return null
+    }
+
+    /** A finished icon, fitted into the icon square without cropping. */
+    private fun whole(b: Bitmap, size: Int): Bitmap {
+        val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val sc = minOf(size.toFloat() / b.width, size.toFloat() / b.height)
+        val w = b.width * sc; val h = b.height * sc
+        android.graphics.Canvas(out).drawBitmap(b, null,
+            android.graphics.RectF((size - w) / 2, (size - h) / 2, (size + w) / 2, (size + h) / 2),
+            android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+        return out
     }
 
     private fun png(b: Bitmap) = ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
