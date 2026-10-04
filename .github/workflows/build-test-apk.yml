@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to publish the test prerelease in this repo
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 17
@@ -43,6 +45,21 @@ jobs:
         with:
           name: SonderIcons-${{ github.ref_name == '' && 'test' || github.run_number }}
           path: app/build/outputs/apk/release/*.apk
+      - name: Publish as a test prerelease here
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # One prerelease per test branch, replaced on every push, so the newest APK is
+          # always at the same place. Test tags only; real versions are released by hand.
+          SLUG=$(echo "${GITHUB_REF_NAME#test/}" | tr '/' '-')
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          cp "$APK" "SonderIcons-$SLUG.apk"
+          gh release delete "test-$SLUG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create "test-$SLUG" "SonderIcons-$SLUG.apk" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "SonderIcons test: $SLUG" \
+            --notes "Test build from $GITHUB_REF_NAME at ${GITHUB_SHA::7}"
       - name: Publish to the artifacts repository
         shell: bash
         env:
