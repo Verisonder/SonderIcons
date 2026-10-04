@@ -182,7 +182,7 @@ private fun Home(resumes: Int) {
                 onAll = { shown.forEach { if (it.pkg !in selected) selected += it.pkg } },
                 onClear = { selected.clear() },
                 onApply = { mode ->
-                    val pkgs = selected.toList(); selected.clear()
+                    val pkgs = selected.toList(); selected.clear(); built = false; message = null
                     pkgs.forEach { Prefs.setMode(ctx, it, mode) }
                     scope.launch {
                         val b = base ?: return@launch
@@ -243,7 +243,7 @@ private fun Home(resumes: Int) {
 
     val sheetApp = open
     if (sheetApp != null && base != null) {
-        AppSheet(sheetApp, results[sheetApp.pkg], builder, onDismiss = { open = null }, onChanged = { refresh(sheetApp.pkg) },
+        AppSheet(sheetApp, results[sheetApp.pkg], builder, onDismiss = { open = null }, onChanged = { built = false; message = null; refresh(sheetApp.pkg) },
             onPreview = { previewing = sheetApp })
     }
     previewing?.let { a ->
@@ -259,7 +259,7 @@ private fun Home(resumes: Int) {
     }
     if (styling) StyleScreen(styles, style) { st, changed ->
         styling = false; style = st
-        if (changed) { styles = Style.all(ctx); built = false; reload++ }
+        if (changed) { styles = Style.all(ctx); built = false; message = null; reload++ }
     }
     if (picking) target?.let { t ->
         ThemePicker(t, onDismiss = { picking = false }, onPick = { id ->
@@ -573,11 +573,12 @@ private fun BuildBar(enabled: Boolean, busy: String?, message: String?, built: B
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text("Now apply it in Themes", style = MaterialTheme.typography.bodyMedium)
-            Text("My account, Themes, then Theme backup, Apply. Choose Theme backup, not SonderIcons.",
-                style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+            Text("My account, Themes, then Theme backup, Apply.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+            Text("Choose Theme backup, not SonderIcons.", style = MaterialTheme.typography.labelSmall, color = Palette.Red)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
+            // once built, Build has nothing to do until something changes, so only Themes is left
+            if (!(built && busy == null)) Button(
                 onClick = onBuild, enabled = enabled, modifier = Modifier.weight(1f).height(52.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Palette.White, contentColor = Palette.Black,
                     disabledContainerColor = Palette.Circle, disabledContentColor = Palette.Muted),
@@ -585,7 +586,11 @@ private fun BuildBar(enabled: Boolean, busy: String?, message: String?, built: B
                 if (busy != null) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Palette.Muted)
                 else Text("Build icons")
             }
-            OutlinedButton(
+            if (built && busy == null) Button(
+                onClick = onThemes, modifier = Modifier.weight(1f).height(52.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Palette.White, contentColor = Palette.Black),
+            ) { Text("Open Themes") }
+            else OutlinedButton(
                 onClick = onThemes, modifier = Modifier.height(52.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line),
             ) { Text("Open Themes", color = Palette.White) }
