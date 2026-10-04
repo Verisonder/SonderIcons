@@ -39,7 +39,13 @@ jobs:
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: gradle --no-daemon assembleRelease > build.txt 2>&1 || (tail -n 80 build.txt; exit 1)
+        run: |
+          if ! gradle --no-daemon assembleRelease > build.txt 2>&1; then
+            tail -n 80 build.txt
+            # compiler errors as annotations: readable through the API, unlike the raw log
+            grep -E "^e: |error:" build.txt | head -n 40 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
       - name: Keep the APK
         uses: actions/upload-artifact@v4
         with:

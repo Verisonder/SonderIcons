@@ -376,7 +376,7 @@ private fun StylePicker(current: Style, styles: List<Style>, onPick: (Style) -> 
                     StyleKind.PACK -> IconPack(ctx, st.pack!!, st.label).let { p ->
                         p.covers("com.whatsapp", null)?.let { p.bitmap(it, 96) }
                     } ?: runCatching {
-                        val d = ctx.packageManager.getApplicationIcon(st.pack)
+                        val d = ctx.packageManager.getApplicationIcon(st.pack!!)
                         Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).also { b -> d.setBounds(0, 0, 96, 96); d.draw(android.graphics.Canvas(b)) }
                     }.getOrNull()
                     StyleKind.THEME -> null
