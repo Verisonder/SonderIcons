@@ -87,7 +87,7 @@ class Style(
 
     companion object {
         private val BUILT_IN = listOf(
-            Style("set-dark", "Dark circles", StyleKind.SET, asset = "styles/dark-circles.zip"),
+            Style("set-dark", "Dark Nothing", StyleKind.SET, asset = "styles/dark-circles.zip"),
             Style("theme", "My theme", StyleKind.THEME),
             Style("light", "Light circles", StyleKind.DRAWN, shape = Shape("circle", background = 0xFFF2F2F2.toInt(), glyph = 0xFF1C1C1C.toInt())),
             Style("squircle-dark", "Dark squircles", StyleKind.DRAWN, shape = Shape("squircle")),
