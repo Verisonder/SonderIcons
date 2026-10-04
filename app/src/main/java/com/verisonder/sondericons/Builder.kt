@@ -64,8 +64,25 @@ class Builder(private val ctx: Context) {
     class Unsupported(message: String) : Exception(message)
 
     /** The starting icon set for [style]. Throws [Unsupported] with a reason a person can act on. */
+    // read and written from several background jobs at once (full redraws, single-app changes)
+    private val baseCache = java.util.concurrent.ConcurrentHashMap<String, Base>()
+    private val resultCache = java.util.concurrent.ConcurrentHashMap<String, Result>()
+
+    /** Everything a prepared look depends on. Same key, same base: no re-reading, no re-lifting glyphs. */
+    private fun baseKey(theme: ThemeStore.Theme, style: Style, origId: String?) = listOf(
+        theme.id, origId, style.id, Prefs.reshaping(ctx), Prefs.packBack(ctx),
+        if (style.id == "custom" || style.kind == StyleKind.PACK) Prefs.customShape(ctx) else null,
+    ).joinToString("|")
+
+    @Synchronized
     fun loadBase(theme: ThemeStore.Theme, style: Style = Style.byId(ctx, Prefs.styleId(ctx))): Base {
         val origId = originalIcons(theme)
+        val key = baseKey(theme, style, origId)
+        baseCache[key]?.let { return it }
+        return loadBaseFresh(theme, style, origId).also { baseCache.clear(); baseCache[key] = it; resultCache.clear() }
+    }
+
+    private fun loadBaseFresh(theme: ThemeStore.Theme, style: Style, origId: String?): Base {
         val entries = LinkedHashMap<String, ByteArray>()
         fun unzip(bytes: ByteArray) = ZipInputStream(ByteArrayInputStream(bytes)).use { z ->
             while (true) { val e = z.nextEntry ?: break; if (!e.isDirectory) entries[e.name] = z.readBytes() }
@@ -145,7 +162,21 @@ class Builder(private val ctx: Context) {
     }
 
     /** What [pkg] will look like after a build, with a reason a person can read. */
+    /**
+     * What [pkg] will look like, remembered against everything that decides it, so a
+     * redraw after an unrelated change returns at once.
+     */
     fun resultFor(pkg: String, base: Base): Result {
+        val custom = Prefs.customFile(ctx, pkg)
+        val key = listOf(
+            System.identityHashCode(base), pkg, Prefs.mode(ctx, pkg), Prefs.scale(ctx, pkg), Prefs.globalScale(ctx),
+            Prefs.tuning(ctx, pkg), Prefs.asIs(ctx, pkg), if (custom.exists()) custom.lastModified() else 0,
+        ).joinToString("|")
+        resultCache[key]?.let { return it }
+        return resultFresh(pkg, base).also { resultCache[key] = it }
+    }
+
+    private fun resultFresh(pkg: String, base: Base): Result {
         val target = (base.target * Prefs.scale(ctx, pkg) * Prefs.globalScale(ctx)).toInt()
         val t = Prefs.tuning(ctx, pkg)
         return when (Prefs.mode(ctx, pkg)) {

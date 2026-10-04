@@ -139,10 +139,7 @@ private fun Home(resumes: Int) {
             if (shizuku == true) {
                 val t = builder.target()
                 // reread the theme only when the target changed; a resume alone shouldn't redraw everything
-                if (t.theme?.id != target?.theme?.id || base == null) {
-                    base = load(t)
-                    results.clear()
-                }
+                if (t.theme?.id != target?.theme?.id || base == null) base = load(t)
                 target = t
             }
         }
@@ -155,7 +152,7 @@ private fun Home(resumes: Int) {
             val t = builder.target()
             target = t; base = load(t)
         }
-        results.clear(); refreshAll()
+        refreshAll()   // cached icons come back at once; old ones stay on screen meanwhile
     }
 
     val counts = remember(results.toMap()) { Filter.entries.associateWith { f -> apps.count { f.matches(results[it.pkg]?.kind) } } }
@@ -260,8 +257,9 @@ private fun Home(resumes: Int) {
             onDismiss = { previewing = null },
         )
     }
-    if (styling) StyleScreen(styles, style) { st ->
-        styling = false; styles = Style.all(ctx); style = st; built = false; reload++
+    if (styling) StyleScreen(styles, style) { st, changed ->
+        styling = false; style = st
+        if (changed) { styles = Style.all(ctx); built = false; reload++ }
     }
     if (picking) target?.let { t ->
         ThemePicker(t, onDismiss = { picking = false }, onPick = { id ->

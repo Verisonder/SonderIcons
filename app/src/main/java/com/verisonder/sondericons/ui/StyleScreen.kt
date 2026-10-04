@@ -40,7 +40,7 @@ import kotlin.math.roundToInt
  * Done redraws the apps.
  */
 @Composable
-fun StyleScreen(styles: List<Style>, current: Style, onDone: (Style) -> Unit) {
+fun StyleScreen(styles: List<Style>, current: Style, onDone: (Style, Boolean) -> Unit) {
     val ctx = LocalContext.current
     var style by remember { mutableStateOf(current) }
     var shape by remember { mutableStateOf(Prefs.customShape(ctx)) }
@@ -50,11 +50,16 @@ fun StyleScreen(styles: List<Style>, current: Style, onDone: (Style) -> Unit) {
     var tuning by remember { mutableStateOf(Prefs.globalTuning(ctx)) }
     var reshape by remember { mutableStateOf(Prefs.reshaping(ctx)) }
 
+    // what the screen opened with, to tell on Done whether anything needs redrawing
+    val opened = remember { listOf(current.id, Prefs.customShape(ctx), Prefs.packBack(ctx), Prefs.toggles(ctx),
+        Prefs.globalScale(ctx), Prefs.globalTuning(ctx), Prefs.reshaping(ctx)) }
+
     fun done() {
         Prefs.setStyleId(ctx, style.id); Prefs.setCustomShape(ctx, shape); Prefs.setPackBack(ctx, packBack)
         Prefs.setToggles(ctx, toggles); Prefs.setGlobalScale(ctx, size); Prefs.setGlobalTuning(ctx, tuning)
         Prefs.setReshaping(ctx, reshape)
-        onDone(Style.byId(ctx, style.id))
+        val now = listOf(style.id, shape, packBack, toggles, size, tuning, reshape)
+        onDone(Style.byId(ctx, style.id), now != opened)
     }
 
     Dialog(onDismissRequest = ::done, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
