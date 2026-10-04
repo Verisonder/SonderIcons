@@ -200,11 +200,9 @@ class Builder(private val ctx: Context) {
             }
             Prefs.Mode.AUTO -> {
                 if (themedName != null) return Result(base.themeIcon(themedName), Kind.THEME, "Designed icon")
-                val la = ctx.getSystemService(LauncherApps::class.java)
-                val info = la.getActivityList(pkg.substringBefore('/'), Process.myUserHandle())
-                    .firstOrNull { entry == null || it.componentName.className == entry.cls }
+                val ai = launcherActivities(pkg.substringBefore('/')).firstOrNull { entry == null || it.name == entry.cls }
                     ?: return Result(null, Kind.MISSING, "Not on the home screen")
-                val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(rawIcon(info.activityInfo) ?: info.getIcon(0)), t)
+                val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(rawIcon(ai) ?: ai.loadIcon(ctx.packageManager)), t)
                 if (mask == null) Result(null, Kind.MISSING, "No clear shape found. Pick an image for it.")
                 else Result(GlyphEngine.render(mask, base.pattern, target, t, base.glyph), Kind.DRAWN, when (src) {
                     "mono", "mono-color" -> "From its monochrome icon"
@@ -234,9 +232,7 @@ class Builder(private val ctx: Context) {
     /** The app's own icon, for the sheet. */
     fun appIcon(pkg: String): Bitmap? = runCatching {
         val e = entryOf(pkg)
-        val ai = ctx.getSystemService(LauncherApps::class.java)
-            .getActivityList(pkg.substringBefore('/'), Process.myUserHandle())
-            .firstOrNull { e == null || it.componentName.className == e.cls }?.activityInfo
+        val ai = launcherActivities(pkg.substringBefore('/')).firstOrNull { e == null || it.name == e.cls }
         val d = ai?.let { rawIcon(it) } ?: ctx.packageManager.getApplicationIcon(pkg.substringBefore('/'))
         Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888).also { b ->
             d.setBounds(0, 0, 192, 192); d.draw(android.graphics.Canvas(b))
@@ -253,13 +249,31 @@ class Builder(private val ctx: Context) {
         val file: String get() = if (cls.startsWith(pkg)) cls else "$pkg#$cls"
     }
 
+    /**
+     * Every launcher icon [pkg] has, the ones on screen first. Apps that offer alternative
+     * icons (Ente, Morphe) ship each as an activity-alias and enable one at a time; the
+     * launcher only lists the enabled one, so the disabled ones are asked for separately.
+     */
+    fun launcherActivities(pkg: String): List<android.content.pm.ActivityInfo> {
+        val pm = ctx.packageManager
+        val enabled = ctx.getSystemService(LauncherApps::class.java).getActivityList(pkg, Process.myUserHandle()).map { it.activityInfo }
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER).setPackage(pkg)
+        val all = runCatching {
+            pm.queryIntentActivities(intent, android.content.pm.PackageManager.ResolveInfoFlags.of(
+                android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS.toLong())).map { it.activityInfo }
+        }.getOrDefault(emptyList())
+        return enabled + all.filter { a -> enabled.none { it.name == a.name } }
+    }
+
     fun entries(): List<Entry> {
-        val list = ctx.getSystemService(LauncherApps::class.java).getActivityList(null, Process.myUserHandle())
+        val pm = ctx.packageManager
+        val pkgs = ctx.getSystemService(LauncherApps::class.java).getActivityList(null, Process.myUserHandle())
+            .map { it.applicationInfo.packageName }.distinct()
         val out = ArrayList<Entry>()
-        list.groupBy { it.applicationInfo.packageName }.forEach { (pkg, acts) ->
-            acts.forEachIndexed { i, a ->
-                out += Entry(if (i == 0) pkg else "$pkg/${a.componentName.className}", pkg, a.componentName.className,
-                    a.label?.toString() ?: pkg, i == 0)
+        for (pkg in pkgs) {
+            launcherActivities(pkg).forEachIndexed { i, a ->
+                val label = runCatching { a.loadLabel(pm).toString() }.getOrDefault(pkg)
+                out += Entry(if (i == 0) pkg else "$pkg/${a.name}", pkg, a.name, label, i == 0)
             }
         }
         return out.sortedBy { it.label.lowercase() }
@@ -267,9 +281,16 @@ class Builder(private val ctx: Context) {
 
     private fun entryOf(key: String): Entry? {
         val pkg = key.substringBefore('/')
-        val acts = ctx.getSystemService(LauncherApps::class.java).getActivityList(pkg, Process.myUserHandle())
-        val a = if ('/' in key) acts.firstOrNull { it.componentName.className == key.substringAfter('/') } else acts.firstOrNull()
-        return a?.let { Entry(key, pkg, it.componentName.className, it.label?.toString() ?: pkg, '/' !in key) }
+        val acts = launcherActivities(pkg)
+        val a = if ('/' in key) acts.firstOrNull { it.name == key.substringAfter('/') } else acts.firstOrNull()
+        return a?.let { Entry(key, pkg, it.name, runCatching { it.loadLabel(ctx.packageManager).toString() }.getOrDefault(pkg), '/' !in key) }
+    }
+
+    /** True for an alternative icon the app hasn't switched to. */
+    fun isAlternate(key: String): Boolean {
+        val e = entryOf(key) ?: return false
+        return ctx.getSystemService(LauncherApps::class.java).getActivityList(e.pkg, Process.myUserHandle())
+            .none { it.componentName.className == e.cls }
     }
 
     fun launchablePackages(): List<String> =

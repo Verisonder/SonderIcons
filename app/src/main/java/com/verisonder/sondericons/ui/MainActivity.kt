@@ -147,7 +147,10 @@ private fun Home(resumes: Int) {
             apps = all.filter { it.primary }.map { e ->
                 App(e.pkg, runCatching { pm.getApplicationLabel(pm.getApplicationInfo(e.pkg, 0)).toString() }.getOrDefault(e.label))
             }.sortedBy { it.label.lowercase() }
-            extras = all.filter { !it.primary }.map { App(it.key, it.label) }
+            extras = all.filter { !it.primary }.map { e ->
+                val app = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(e.pkg, 0)).toString() }.getOrDefault(e.label)
+                App(e.key, if (builder.isAlternate(e.key)) "$app, alternate icon" else e.label)
+            }
             if (shizuku == true) {
                 val t = builder.target()
                 // reread the theme only when the target changed; a resume alone shouldn't redraw everything
@@ -708,7 +711,8 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
     var packFor by remember { mutableStateOf<IconPack?>(null) }
     var asIs by remember { mutableStateOf(Prefs.asIs(ctx, a.pkg)) }
     packFor?.let { pk ->
-        PackIconPicker(pk, packs, onSwitch = { packFor = it }, onDismiss = { packFor = null }, onPick = { bmp ->
+        PackIconPicker(pk, packs, initialQuery = a.label.substringBefore(',').split(' ').first(),
+            onSwitch = { packFor = it }, onDismiss = { packFor = null }, onPick = { bmp ->
             Prefs.customFile(ctx, a.pkg).outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
             // a pack icon is a finished design: used whole unless the person turns that off
             Prefs.setMode(ctx, a.pkg, Prefs.Mode.CUSTOM); mode = Prefs.Mode.CUSTOM
@@ -762,17 +766,17 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
                 },
                 style = MaterialTheme.typography.bodyMedium, color = Palette.Muted,
             )
+            if (mode == Prefs.Mode.CUSTOM || r?.kind == Kind.MISSING) {
+                PickAnIcon(a, packs, onPack = { pk -> packFor = pk },
+                    onGallery = { picker.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) },
+                    onUse = { bmp, whole ->
+                        Prefs.customFile(ctx, a.pkg).outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                        Prefs.setMode(ctx, a.pkg, Prefs.Mode.CUSTOM); mode = Prefs.Mode.CUSTOM
+                        Prefs.setAsIs(ctx, a.pkg, whole); asIs = whole; onChanged()
+                    },
+                    onLetter = { Prefs.setMode(ctx, a.pkg, Prefs.Mode.LETTER); mode = Prefs.Mode.LETTER; onChanged() })
+            }
             if (mode == Prefs.Mode.CUSTOM) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(
-                        onClick = { picker.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) },
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line), modifier = Modifier.weight(1f),
-                    ) { Text("From gallery", color = Palette.White) }
-                    if (packs.isNotEmpty()) OutlinedButton(
-                        onClick = { packFor = packs.first() },
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line), modifier = Modifier.weight(1f),
-                    ) { Text("From an icon pack", color = Palette.White) }
-                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Use as it is", style = MaterialTheme.typography.bodyMedium)
@@ -853,8 +857,8 @@ internal fun ColorRow(label: String, value: Int, onChange: (Int) -> Unit) {
 
 /** Any icon from an installed pack, with search, for one app. */
 @Composable
-private fun PackIconPicker(pack: IconPack, packs: List<IconPack>, onSwitch: (IconPack) -> Unit, onDismiss: () -> Unit, onPick: (Bitmap) -> Unit) {
-    var q by remember { mutableStateOf("") }
+private fun PackIconPicker(pack: IconPack, packs: List<IconPack>, initialQuery: String = "", onSwitch: (IconPack) -> Unit, onDismiss: () -> Unit, onPick: (Bitmap) -> Unit) {
+    var q by remember { mutableStateOf(initialQuery) }
     val names by produceState(emptyList<String>(), pack.pkg) { value = withContext(Dispatchers.Default) { pack.allNames() } }
     val shown = remember(names, q) { if (q.isBlank()) names else names.filter { it.contains(q.trim().replace(' ', '_'), true) } }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Palette.Circle) {
@@ -886,6 +890,52 @@ private fun PackIconPicker(pack: IconPack, packs: List<IconPack>, onSwitch: (Ico
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Where an icon can come from when the app's own doesn't work: any installed pack that has
+ * one for this very app (one tap), the first letter, a pack browsed by hand, or the gallery.
+ */
+@Composable
+private fun PickAnIcon(
+    a: App, packs: List<IconPack>, onPack: (IconPack) -> Unit, onGallery: () -> Unit,
+    onUse: (Bitmap, Boolean) -> Unit, onLetter: () -> Unit,
+) {
+    val pkg = a.pkg.substringBefore('/'); val cls = a.pkg.substringAfter('/', "").ifEmpty { null }
+    val suggestions by produceState(emptyList<Pair<String, Bitmap>>(), a.pkg, packs) {
+        value = withContext(Dispatchers.Default) {
+            packs.mapNotNull { p -> p.covers(pkg, cls)?.let { n -> p.bitmap(n, 432)?.let { p.label to it } } }
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Pick an icon", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+            suggestions.forEach { (label, bmp) ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(72.dp).clickable { onUse(bmp, true) }) {
+                    Image(bmp.asImageBitmap(), label, Modifier.size(56.dp))
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = Palette.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(72.dp).clickable(onClick = onLetter)) {
+                Box(Modifier.size(56.dp).clip(CircleShape).background(Palette.Black), contentAlignment = Alignment.Center) {
+                    Text(a.label.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "?", style = MaterialTheme.typography.titleMedium)
+                }
+                Text("Letter", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+            }
+        }
+        if (suggestions.isEmpty() && packs.isNotEmpty())
+            Text("No installed pack has an icon made for this app.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (packs.isNotEmpty()) OutlinedButton(
+                onClick = { onPack(packs.first()) }, modifier = Modifier.weight(1f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line),
+            ) { Text("Browse a pack", color = Palette.White) }
+            OutlinedButton(
+                onClick = onGallery, modifier = Modifier.weight(1f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line),
+            ) { Text("From gallery", color = Palette.White) }
         }
     }
 }
