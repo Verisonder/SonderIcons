@@ -21,7 +21,14 @@ import java.util.zip.ZipOutputStream
  */
 class Builder(private val ctx: Context) {
 
-    class Base(val zip: ByteArray, val themed: Set<String>, val pattern: Bitmap, val dir: String, val target: Int)
+    /** The theme's original icons file, entry by entry, in order. */
+    class Base(val entries: LinkedHashMap<String, ByteArray>, val themed: Set<String>, val pattern: Bitmap, val dir: String, val target: Int) {
+        fun themeIcon(pkg: String): Bitmap? = entries[dir + pkg + ".png"]?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+    }
+
+    /** What an app will look like, and why. */
+    enum class Kind { DRAWN, CUSTOM, THEME, MISSING }
+    class Result(val bitmap: Bitmap?, val kind: Kind, val note: String)
 
     class Report(val made: Int, val needsOverride: List<String>, val error: String? = null)
 
@@ -31,52 +38,59 @@ class Builder(private val ctx: Context) {
         val origId = if (theme.iconsId != own) theme.iconsId.also { Prefs.setOriginalIconsId(ctx, it) }
                      else Prefs.originalIconsId(ctx) ?: return null
         val zip = ThemeStore.read("${ThemeStore.DATA}/content/icons/$origId.mrc") ?: return null
-        var dir: String? = null; var pattern: Bitmap? = null
-        val names = HashSet<String>()
+        val entries = LinkedHashMap<String, ByteArray>()
         ZipInputStream(ByteArrayInputStream(zip)).use { z ->
             while (true) {
                 val e = z.nextEntry ?: break
-                val n = e.name
-                if (n.endsWith("/icon_pattern.png")) dir = n.substringBeforeLast('/') + "/"
-                names += n
+                if (!e.isDirectory) entries[e.name] = z.readBytes()
             }
         }
-        // second pass for the pattern bytes (ZipInputStream cannot rewind)
-        ZipInputStream(ByteArrayInputStream(zip)).use { z ->
-            while (true) {
-                val e = z.nextEntry ?: break
-                if (e.name.endsWith("/icon_pattern.png")) { val b = z.readBytes(); pattern = BitmapFactory.decodeByteArray(b, 0, b.size); break }
-            }
-        }
-        val d = dir ?: return null
-        val p = pattern ?: return null
-        val themed = names.filter { it.startsWith(d) && it.endsWith(".png") }
-            .map { it.removePrefix(d).removeSuffix(".png") }.toSet()
+        val patternName = entries.keys.firstOrNull { it.endsWith("/icon_pattern.png") } ?: return null
+        val dir = patternName.substringBeforeLast('/') + "/"
+        val pb = entries.getValue(patternName)
+        val pattern = BitmapFactory.decodeByteArray(pb, 0, pb.size) ?: return null
+        val themed = entries.keys.filter { it.startsWith(dir) && it.endsWith(".png") }
+            .map { it.removePrefix(dir).removeSuffix(".png") }.toSet()
         // the theme's own glyphs measured 58px on a 180px icon; scale with the pattern
-        return Base(zip, themed, p, d, (p.width * 58f / 180f).toInt())
+        return Base(entries, themed, pattern, dir, (pattern.width * 58f / 180f).toInt())
     }
 
-    /** What this app would draw for [pkg], or null to leave the theme's icon/fallback alone. */
-    fun iconFor(pkg: String, base: Base): Pair<Bitmap?, String> {
-        when (Prefs.mode(ctx, pkg)) {
-            Prefs.Mode.THEME -> return null to "theme"
+    /** What [pkg] will look like after a build, with a reason a person can read. */
+    fun resultFor(pkg: String, base: Base): Result {
+        val target = (base.target * Prefs.scale(ctx, pkg) * Prefs.globalScale(ctx)).toInt()
+        return when (Prefs.mode(ctx, pkg)) {
+            Prefs.Mode.THEME -> Result(base.themeIcon(pkg), Kind.THEME,
+                if (pkg in base.themed) "Theme icon" else "Theme's traced outline")
             Prefs.Mode.CUSTOM -> {
                 val f = Prefs.customFile(ctx, pkg)
                 val b = if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
-                val out = b?.let { GlyphEngine.fromImage(it, base.pattern, base.target) }
-                return out to (if (out != null) "custom" else "custom image unusable")
+                val out = b?.let { GlyphEngine.fromImage(it, base.pattern, target) }
+                if (out != null) Result(out, Kind.CUSTOM, "Your image")
+                else Result(null, Kind.MISSING, "That image has no clear shape. Try one with a transparent background.")
             }
             Prefs.Mode.AUTO -> {
-                if (pkg in base.themed) return null to "theme"
+                if (pkg in base.themed) return Result(base.themeIcon(pkg), Kind.THEME, "Theme icon")
                 val la = ctx.getSystemService(LauncherApps::class.java)
                 val info = la.getActivityList(pkg, Process.myUserHandle()).firstOrNull()
-                    ?: return null to "not launchable"
-                val layers = GlyphEngine.layersOf(info.getIcon(0))
-                val (mask, src) = GlyphEngine.pick(layers)
-                return (mask?.let { GlyphEngine.render(it, base.pattern, base.target) }) to src
+                    ?: return Result(null, Kind.MISSING, "Not on the home screen")
+                val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(info.getIcon(0)))
+                if (mask == null) Result(null, Kind.MISSING, "No clear shape found. Pick an image for it.")
+                else Result(GlyphEngine.render(mask, base.pattern, target), Kind.DRAWN, when (src) {
+                    "mono" -> "From its monochrome icon"
+                    "fg" -> "From its icon's shape"
+                    else -> "Cut out of its icon"
+                })
             }
         }
     }
+
+    /** The app's own icon, for the sheet. */
+    fun appIcon(pkg: String): Bitmap? = runCatching {
+        val d = ctx.packageManager.getApplicationIcon(pkg)
+        Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888).also { b ->
+            d.setBounds(0, 0, 192, 192); d.draw(android.graphics.Canvas(b))
+        }
+    }.getOrNull()
 
     fun launchablePackages(): List<String> =
         ctx.getSystemService(LauncherApps::class.java)
@@ -98,9 +112,12 @@ class Builder(private val ctx: Context) {
         val pkgs = launchablePackages()
         pkgs.forEachIndexed { i, pkg ->
             progress("Drawing ${i + 1} of ${pkgs.size}")
-            val (bmp, src) = runCatching { iconFor(pkg, base) }.getOrElse { null to "error" }
-            if (bmp != null) made[pkg] = png(bmp)
-            else if (src != "theme" && src != "not launchable") needs += pkg
+            val r = runCatching { resultFor(pkg, base) }.getOrNull()
+            when (r?.kind) {
+                Kind.DRAWN, Kind.CUSTOM -> made[pkg] = png(r.bitmap!!)
+                Kind.MISSING -> needs += pkg
+                else -> {}
+            }
         }
 
         progress("Writing icons")
@@ -156,13 +173,7 @@ class Builder(private val ctx: Context) {
                 zo.putNextEntry(e); zo.write(data); zo.closeEntry()
             }
             val replaced = made.keys.map { base.dir + it + ".png" }.toSet()
-            ZipInputStream(ByteArrayInputStream(base.zip)).use { zi ->
-                while (true) {
-                    val e = zi.nextEntry ?: break
-                    if (e.isDirectory || e.name in replaced) continue
-                    put(e.name, zi.readBytes())
-                }
-            }
+            for ((name, data) in base.entries) if (name !in replaced) put(name, data)
             for ((pkg, data) in made) put(base.dir + pkg + ".png", data)
         }
         return out.toByteArray()

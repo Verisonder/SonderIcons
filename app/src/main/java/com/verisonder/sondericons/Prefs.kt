@@ -16,6 +16,12 @@ object Prefs {
     fun setMode(ctx: Context, pkg: String, mode: Mode) =
         sp(ctx).edit().putString("mode:$pkg", mode.name).apply()
 
+    /** Glyph size, as a multiple of the theme's own glyph size. */
+    fun scale(ctx: Context, pkg: String): Float = sp(ctx).getFloat("scale:$pkg", 1f)
+    fun setScale(ctx: Context, pkg: String, v: Float) = sp(ctx).edit().putFloat("scale:$pkg", v).apply()
+    fun globalScale(ctx: Context): Float = sp(ctx).getFloat("globalScale", 1f)
+    fun setGlobalScale(ctx: Context, v: Float) = sp(ctx).edit().putFloat("globalScale", v).apply()
+
     fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "$pkg.png")
 
     /** This app's own icons resource id. Made once, then kept, so rebuilds replace in place. */
