@@ -2,9 +2,15 @@
 
 Every app on a HyperOS phone in one look. No root.
 
+**For Xiaomi, Redmi and POCO phones on HyperOS. Needs [Shizuku](https://shizuku.rikka.app/).**
+
+![Before and after: traced outlines become a complete set](docs/screenshots/before-after.jpg)
+
 HyperOS themes ship hand-drawn icons for a fixed list of apps and trace an outline of
 everything else. SonderIcons draws the rest to match — from each app's own monochrome
 glyph where it has one — and lets you restyle the whole set.
+
+![Three looks: Dark Nothing, an outline pack, a colour pack](docs/screenshots/looks.jpg)
 
 ## Features
 
@@ -22,6 +28,8 @@ glyph where it has one — and lets you restyle the whole set.
 - **Extras.** Second icons and alternative icons (apps like Ente switch between several),
   pinned shortcuts, and how unknown icons are drawn.
 - **OLED, Dark and Light** app themes.
+
+![The app: your apps, and the Style screen](docs/screenshots/app.jpg)
 
 ## How it works
 
