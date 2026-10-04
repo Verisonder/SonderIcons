@@ -158,7 +158,7 @@ object GlyphEngine {
         }
         crop.setPixels(out, 0, w, 0, 0, w, h)
         val s = target.toFloat() / max(w, h)
-        var g = Bitmap.createScaledBitmap(crop, max(1, (w * s).roundToInt()), max(1, (h * s).roundToInt()), true)
+        var g = shrink(crop, max(1, (w * s).roundToInt()), max(1, (h * s).roundToInt()))
 
         // thin strokes vanish next to the theme's glyphs; thicken them, unless it is a
         // dotted design, which thickening would melt together
@@ -196,6 +196,19 @@ object GlyphEngine {
     }
 
     // ---------------- helpers ----------------
+
+    /**
+     * Shrinks by halving until close, then one last step. A single bilinear resize from
+     * ~400px to ~58px samples a few pixels out of each block and smears strokes thick;
+     * halving averages every pixel, which keeps edges as clean as a proper area filter.
+     */
+    private fun shrink(src: Bitmap, w: Int, h: Int): Bitmap {
+        var b = src
+        while (b.width / 2 >= w && b.height / 2 >= h) {
+            b = Bitmap.createScaledBitmap(b, b.width / 2, b.height / 2, true)
+        }
+        return if (b.width == w && b.height == h) b else Bitmap.createScaledBitmap(b, w, h, true)
+    }
 
     private fun pixels(b: Bitmap): IntArray {
         val bb = if (b.config == Bitmap.Config.ARGB_8888) b else b.copy(Bitmap.Config.ARGB_8888, false)

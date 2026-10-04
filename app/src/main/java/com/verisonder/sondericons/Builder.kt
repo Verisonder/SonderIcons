@@ -92,7 +92,7 @@ class Builder(private val ctx: Context) {
                 val la = ctx.getSystemService(LauncherApps::class.java)
                 val info = la.getActivityList(pkg, Process.myUserHandle()).firstOrNull()
                     ?: return Result(null, Kind.MISSING, "Not on the home screen")
-                val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(info.getIcon(0)))
+                val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(rawIcon(info.activityInfo) ?: info.getIcon(0)))
                 if (mask == null) Result(null, Kind.MISSING, "No clear shape found. Pick an image for it.")
                 else Result(GlyphEngine.render(mask, base.pattern, target), Kind.DRAWN, when (src) {
                     "mono" -> "From its monochrome icon"
@@ -103,6 +103,17 @@ class Builder(private val ctx: Context) {
         }
     }
 
+    /**
+     * The icon as the app ships it. HyperOS themes icons inside PackageManager itself, so
+     * getIcon() and loadIcon() hand back the theme's traced fallback for apps the theme
+     * does not cover. Reading the drawable from the app's own resources skips that.
+     */
+    private fun rawIcon(ai: android.content.pm.ActivityInfo): android.graphics.drawable.Drawable? = runCatching {
+        val res = ctx.packageManager.getResourcesForApplication(ai.applicationInfo)
+        val id = ai.iconResource.takeIf { it != 0 } ?: ai.applicationInfo.icon
+        if (id == 0) null else res.getDrawableForDensity(id, android.util.DisplayMetrics.DENSITY_XXXHIGH, null)
+    }.getOrNull()
+
     fun label(pkg: String): String = runCatching {
         val pm = ctx.packageManager
         pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
@@ -110,7 +121,9 @@ class Builder(private val ctx: Context) {
 
     /** The app's own icon, for the sheet. */
     fun appIcon(pkg: String): Bitmap? = runCatching {
-        val d = ctx.packageManager.getApplicationIcon(pkg)
+        val ai = ctx.getSystemService(LauncherApps::class.java)
+            .getActivityList(pkg, Process.myUserHandle()).firstOrNull()?.activityInfo
+        val d = ai?.let { rawIcon(it) } ?: ctx.packageManager.getApplicationIcon(pkg)
         Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888).also { b ->
             d.setBounds(0, 0, 192, 192); d.draw(android.graphics.Canvas(b))
         }
