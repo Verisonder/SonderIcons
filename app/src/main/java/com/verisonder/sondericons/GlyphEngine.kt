@@ -199,7 +199,7 @@ object GlyphEngine {
         val ch = label.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "?"
         val b = Bitmap.createBitmap(N, N, Bitmap.Config.ARGB_8888)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; textSize = N * 0.7f; textAlign = Paint.Align.CENTER
+            this.color = Color.WHITE; textSize = N * 0.7f; textAlign = Paint.Align.CENTER
             typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, 600, false)
         }
         val y = N / 2f - (p.descent() + p.ascent()) / 2f
