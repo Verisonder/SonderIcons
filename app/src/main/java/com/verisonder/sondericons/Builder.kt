@@ -206,7 +206,6 @@ class Builder(private val ctx: Context) {
         ctx.getSystemService(LauncherApps::class.java)
             .getActivityList(null, Process.myUserHandle())
             .map { it.applicationInfo.packageName }
-            .filter { it != ctx.packageName }
             .distinct().sorted()
 
     fun build(progress: (String) -> Unit): Report {
