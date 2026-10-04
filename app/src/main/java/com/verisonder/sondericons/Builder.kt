@@ -48,9 +48,13 @@ class Builder(private val ctx: Context) {
 
     /** The theme's original icons, read from the Themes app's library (never our own build). */
     fun loadBase(theme: ThemeStore.Theme): Base? {
-        val own = Prefs.ownIconsId(ctx)
-        val origId = if (theme.iconsId != own) theme.iconsId.also { Prefs.setOriginalIconsId(ctx, it) }
-                     else Prefs.originalIconsId(ctx) ?: return null
+        // Start from the designer's icons, never from a file we wrote: building on our own
+        // output would keep icons from apps since uninstalled and count ours as the theme's.
+        val current = theme.iconsId
+        val origId = if (current != Prefs.ownIconsId(ctx) && !ThemeStore.isOurs(current)) current
+                     else Prefs.originalIconsId(ctx)?.takeIf { !ThemeStore.isOurs(it) }
+                         ?: ThemeStore.findOriginalIcons(theme.id) ?: return null
+        Prefs.setOriginalIconsId(ctx, origId)
         val zip = ThemeStore.read("${ThemeStore.DATA}/content/icons/$origId.mrc") ?: return null
         val entries = LinkedHashMap<String, ByteArray>()
         ZipInputStream(ByteArrayInputStream(zip)).use { z ->
@@ -190,6 +194,7 @@ class Builder(private val ctx: Context) {
             val replaced = made.keys.map { base.dir + it + ".png" }.toSet()
             for ((name, data) in base.entries) if (name !in replaced) put(name, data)
             for ((pkg, data) in made) put(base.dir + pkg + ".png", data)
+            put("sondericons.json", "{\"app\":\"SonderIcons\",\"icons\":${made.size}}".toByteArray())
         }
         return out.toByteArray()
     }

@@ -89,6 +89,26 @@ object ThemeStore {
         return read("$dir/$name")
     }
 
+    /** Titles of icons files this app (or the PC tool that came before it) has written. */
+    private val OUR_TITLES = setOf("SonderIcons", "Nidal icons", "Nidal icon test")
+
+    fun iconsMeta(iconsId: String): JSONObject? =
+        read("$DATA/meta/icons/$iconsId.mrm")?.let { runCatching { JSONObject(String(it)) }.getOrNull() }
+
+    fun isOurs(iconsId: String): Boolean =
+        iconsMeta(iconsId)?.optJSONObject("titles")?.optString("fallback") in OUR_TITLES
+
+    /**
+     * The theme's own icons, for a theme that currently points at one of ours. Every icons
+     * file records the theme it belongs to, so the original is the one naming [themeId]
+     * as its parent that we did not write.
+     */
+    fun findOriginalIcons(themeId: String): String? =
+        Shell.run("grep -l ${Shell.q(themeId)} $DATA/meta/icons/*.mrm 2>/dev/null").text.lines()
+            .map { it.trim() }.filter { it.endsWith(".mrm") }
+            .map { it.substringAfterLast('/').removeSuffix(".mrm") }
+            .firstOrNull { !isOurs(it) }
+
     /** Points [theme]'s icons at [iconsId]. Returns false if the write did not land. */
     fun link(ctx: Context, theme: Theme, iconsId: String): Boolean {
         val json = JSONObject(theme.json.toString())
