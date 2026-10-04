@@ -118,7 +118,30 @@ class Builder(private val ctx: Context) {
             else -> style.glyph
         }
         // the designed glyphs measured 58px on a 180px icon; scale with the background
-        return Base(entries, themed, pattern, dir, (pattern.width * 58f / 180f).toInt(), glyph, style)
+        val base = Base(entries, themed, pattern, dir, (pattern.width * 58f / 180f).toInt(), glyph, style)
+        val rs = Prefs.reshaping(ctx)
+        return if (rs.on && style.kind != StyleKind.DRAWN) reshaped(base, rs) else base
+    }
+
+    /**
+     * Every designed icon of [base] moved onto the chosen shape, and the shape becomes the
+     * background drawn icons sit on. An icon whose glyph can't be lifted keeps its own look.
+     */
+    private fun reshaped(base: Base, rs: Prefs.Reshaping): Base {
+        val size = base.pattern.width
+        val newPattern = rs.shape.draw(size)
+        // pack icons aren't drawn on the pack's background, so there's nothing to compare against
+        val old: Bitmap? = base.pattern.takeIf { base.style.kind != StyleKind.PACK }
+        val entries = LinkedHashMap(base.entries)
+        for (pkg in base.themed) {
+            val name = base.dir + pkg + ".png"
+            val icon = entries[name]?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } ?: continue
+            val g = runCatching { Reshape.glyph(icon, old) }.getOrNull() ?: continue
+            entries[name] = png(Reshape.onto(g, rs.shape, rs.recolor))
+        }
+        entries[base.dir + "icon_pattern.png"] = png(newPattern)
+        val glyph = if (rs.recolor) rs.shape.glyph else base.glyph
+        return Base(entries, base.themed, newPattern, base.dir, base.target, glyph, base.style)
     }
 
     /** What [pkg] will look like after a build, with a reason a person can read. */

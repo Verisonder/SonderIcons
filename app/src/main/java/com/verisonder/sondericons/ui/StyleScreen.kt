@@ -48,10 +48,12 @@ fun StyleScreen(styles: List<Style>, current: Style, onDone: (Style) -> Unit) {
     var toggles by remember { mutableStateOf(Prefs.toggles(ctx)) }
     var size by remember { mutableFloatStateOf(Prefs.globalScale(ctx)) }
     var tuning by remember { mutableStateOf(Prefs.globalTuning(ctx)) }
+    var reshape by remember { mutableStateOf(Prefs.reshaping(ctx)) }
 
     fun done() {
         Prefs.setStyleId(ctx, style.id); Prefs.setCustomShape(ctx, shape); Prefs.setPackBack(ctx, packBack)
         Prefs.setToggles(ctx, toggles); Prefs.setGlobalScale(ctx, size); Prefs.setGlobalTuning(ctx, tuning)
+        Prefs.setReshaping(ctx, reshape)
         onDone(Style.byId(ctx, style.id))
     }
 
@@ -83,6 +85,23 @@ fun StyleScreen(styles: List<Style>, current: Style, onDone: (Style) -> Unit) {
                 }
                 if (usesShape) Section("Shape", null) { ShapeControls(shape) { shape = it } }
 
+                // any designed look can be moved onto another shape, keeping its designs
+                if (style.kind != StyleKind.DRAWN) Section("Background shape", "Move this look's icons onto another shape.") {
+                    Segments(listOf(false to "Keep", true to "Change"), reshape.on) { reshape = reshape.copy(on = it) }
+                    if (reshape.on) {
+                        ReshapePreview(style, reshape)
+                        ShapeControls(reshape.shape) { reshape = reshape.copy(shape = it) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Recolour glyphs", style = MaterialTheme.typography.bodyMedium)
+                                Text("Use the shape's glyph colour instead of the design's own.",
+                                    style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+                            }
+                            Switch(checked = reshape.recolor, onCheckedChange = { reshape = reshape.copy(recolor = it) }, colors = switchColors())
+                        }
+                    }
+                }
+
                 Section("Quick toggles", "The big Wi-Fi, data and torch buttons.") {
                     ToggleControls(toggles) { toggles = it }
                 }
@@ -107,6 +126,42 @@ fun StyleScreen(styles: List<Style>, current: Style, onDone: (Style) -> Unit) {
         }
     }
 }
+
+/** A designed icon of the chosen look, before and after the new shape. */
+@Composable
+private fun ReshapePreview(style: Style, r: Prefs.Reshaping) {
+    val ctx = LocalContext.current
+    val pair = remember(style.id, r) {
+        val icon: Bitmap? = when (style.kind) {
+            StyleKind.SET -> sampleIcon(ctx, style.asset!!)
+            StyleKind.PACK -> IconPack(ctx, style.pack!!, style.label).let { p -> p.covers("com.whatsapp", null)?.let { p.bitmap(it, 180) } }
+            else -> null
+        }
+        val pattern = if (style.kind == StyleKind.SET) setPattern(ctx, style.asset!!) else null
+        icon?.let { i -> com.verisonder.sondericons.Reshape.glyph(i, pattern)?.let { g -> i to com.verisonder.sondericons.Reshape.onto(g, r.shape, r.recolor) } }
+    }
+    pair?.let { (before, after) ->
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Palette.Line).padding(vertical = 18.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+            Image(before.asImageBitmap(), "Before", Modifier.size(64.dp))
+            Text("to", color = Palette.Muted, style = MaterialTheme.typography.bodyMedium)
+            Image(after.asImageBitmap(), "After", Modifier.size(64.dp))
+        }
+    }
+}
+
+/** The blank background a bundled set ships. */
+private fun setPattern(ctx: android.content.Context, asset: String): Bitmap? = runCatching {
+    java.util.zip.ZipInputStream(ctx.assets.open(asset)).use { z ->
+        while (true) {
+            val e = z.nextEntry ?: return@use null
+            if (e.name.endsWith("/icon_pattern.png")) {
+                val b = z.readBytes(); return@use android.graphics.BitmapFactory.decodeByteArray(b, 0, b.size)
+            }
+        }
+        null
+    }
+}.getOrNull()
 
 @Composable
 private fun Section(title: String, note: String?, content: @Composable ColumnScope.() -> Unit) {

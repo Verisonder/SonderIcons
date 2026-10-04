@@ -83,6 +83,14 @@ object Prefs {
         .putFloat("tg:corner", t.corner).putInt("tg:onBg", t.onBg).putInt("tg:onGlyph", t.onGlyph)
         .putInt("tg:offBg", t.offBg).putInt("tg:offGlyph", t.offGlyph).apply()
 
+    /** A new background for any look's designed icons. Off by default. */
+    data class Reshaping(val on: Boolean = false, val shape: Shape = Shape("squircle"), val recolor: Boolean = false)
+    fun reshaping(ctx: Context) = sp(ctx).let {
+        Reshaping(it.getBoolean("rs:on", false), Shape.fromJson(it.getString("rs:shape", Shape("squircle").toJson())), it.getBoolean("rs:recolor", false))
+    }
+    fun setReshaping(ctx: Context, r: Reshaping) = sp(ctx).edit().putBoolean("rs:on", r.on)
+        .putString("rs:shape", r.shape.toJson()).putBoolean("rs:recolor", r.recolor).apply()
+
     fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "$pkg.png")
 
     /** This app's own icons resource id. Made once, then kept, so rebuilds replace in place. */
