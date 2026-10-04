@@ -840,13 +840,12 @@ private fun AppSheet(
                     onLetter = { Prefs.setMode(ctx, a.pkg, Prefs.Mode.LETTER); mode = Prefs.Mode.LETTER; onChanged() })
             }
             if (mode == Prefs.Mode.CUSTOM) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Use as it is", style = MaterialTheme.typography.bodyMedium)
-                        Text("The picture whole, not turned into a glyph.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
-                    }
-                    Switch(checked = asIs, onCheckedChange = { asIs = it; Prefs.setAsIs(ctx, a.pkg, it); onChanged() }, colors = switchColors())
-                }
+                Text("Picture", style = MaterialTheme.typography.bodyMedium)
+                Segments(listOf(false to "Drawn", true to "As it is"), asIs) { asIs = it; Prefs.setAsIs(ctx, a.pkg, it); onChanged() }
+                Text(
+                    if (asIs) "The picture whole, as you chose it." else "Turned into a glyph in your style, like the other icons.",
+                    style = MaterialTheme.typography.labelSmall, color = Palette.Muted,
+                )
                 if (asIs) {
                     var back by remember { mutableStateOf(Prefs.pictureBack(ctx, a.pkg)) }
                     var backColor by remember { mutableStateOf(Prefs.pictureColor(ctx, a.pkg)) }
