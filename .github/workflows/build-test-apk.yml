@@ -1,0 +1,72 @@
+name: Test APK
+
+on:
+  push:
+    branches: ['test/**']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Restore the signing key
+        shell: bash
+        env:
+          RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE }}
+        run: |
+          # Without the key the release build falls back to the debug key, which still
+          # installs: this app has never been signed with anything else.
+          if [ -n "$RELEASE_KEYSTORE" ]; then
+            echo "$RELEASE_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::RELEASE_KEYSTORE is not set; signing with the debug key."
+          fi
+      - name: Build
+        shell: bash
+        env:
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: gradle --no-daemon assembleRelease > build.txt 2>&1 || (tail -n 80 build.txt; exit 1)
+      - name: Keep the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SonderIcons-${{ github.ref_name == '' && 'test' || github.run_number }}
+          path: app/build/outputs/apk/release/*.apk
+      - name: Publish to the artifacts repository
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ARTIFACTS_PAT }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::warning::ARTIFACTS_PAT not set; APK is under this run's artifacts."; exit 0; fi
+          SLUG=$(echo "${GITHUB_REF_NAME#test/}" | tr '/' '-')
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          cp "$APK" "SonderIcons-$SLUG.apk"
+          gh release delete "sondericons-test-$SLUG" --repo Verisonder/vs-artifacts --yes --cleanup-tag || true
+          gh release create "sondericons-test-$SLUG" "SonderIcons-$SLUG.apk" \
+            --repo Verisonder/vs-artifacts \
+            --title "SonderIcons $SLUG" \
+            --notes "Test build from $GITHUB_REF_NAME at $GITHUB_SHA"
+      - name: Report the failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ARTIFACTS_PAT }}
+        run: |
+          [ -z "$GH_TOKEN" ] && exit 0
+          [ -f build.txt ] || echo "no build log" > build.txt
+          SHA=$(gh api repos/Verisonder/vs-artifacts/contents/failures/sondericons.txt --jq .sha 2>/dev/null || true)
+          gh api -X PUT repos/Verisonder/vs-artifacts/contents/failures/sondericons.txt \
+            -f message="SonderIcons build failure on $GITHUB_REF_NAME" \
+            -f content="$(base64 -w0 build.txt)" \
+            ${SHA:+-f sha="$SHA"}
