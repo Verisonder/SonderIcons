@@ -94,6 +94,12 @@ object Prefs {
     fun appTheme(ctx: Context): String = sp(ctx).getString("appTheme", "oled")!!
     fun setAppTheme(ctx: Context, v: String) = sp(ctx).edit().putString("appTheme", v).apply()
 
+    /** What a picture used as it is sits on: "none", "style" (the look's background), or "color". */
+    fun pictureBack(ctx: Context, pkg: String): String = sp(ctx).getString("pb:$pkg", "none")!!
+    fun setPictureBack(ctx: Context, pkg: String, v: String) = sp(ctx).edit().putString("pb:$pkg", v).apply()
+    fun pictureColor(ctx: Context, pkg: String): Int = sp(ctx).getInt("pc:$pkg", 0xFF1C1C1C.toInt())
+    fun setPictureColor(ctx: Context, pkg: String, v: Int) = sp(ctx).edit().putInt("pc:$pkg", v).apply()
+
     fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "${pkg.replace('/', '#')}.png")
 
     /** Pinned shortcuts and icons the look doesn't know. All off by default. */

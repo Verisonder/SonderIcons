@@ -784,6 +784,25 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
                     }
                     Switch(checked = asIs, onCheckedChange = { asIs = it; Prefs.setAsIs(ctx, a.pkg, it); onChanged() }, colors = switchColors())
                 }
+                if (asIs) {
+                    var back by remember { mutableStateOf(Prefs.pictureBack(ctx, a.pkg)) }
+                    var backColor by remember { mutableStateOf(Prefs.pictureColor(ctx, a.pkg)) }
+                    Text("Background", style = MaterialTheme.typography.bodyMedium)
+                    Segments(listOf("none" to "None", "style" to "Style's", "color" to "Colour"), back) {
+                        back = it; Prefs.setPictureBack(ctx, a.pkg, it); onChanged()
+                    }
+                    Text(
+                        when (back) {
+                            "style" -> "On the look's own background, like the icons around it."
+                            "color" -> "On the look's shape, in a colour you choose."
+                            else -> "The picture alone."
+                        },
+                        style = MaterialTheme.typography.labelSmall, color = Palette.Muted,
+                    )
+                    if (back == "color") ColorRow("Colour", backColor) {
+                        backColor = it; Prefs.setPictureColor(ctx, a.pkg, it); onChanged()
+                    }
+                }
             }
 
             if (mode != Prefs.Mode.THEME) Column {

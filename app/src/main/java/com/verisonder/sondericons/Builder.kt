@@ -171,6 +171,7 @@ class Builder(private val ctx: Context) {
         val key = listOf(
             System.identityHashCode(base), pkg, Prefs.mode(ctx, pkg), Prefs.scale(ctx, pkg), Prefs.globalScale(ctx),
             Prefs.tuning(ctx, pkg), Prefs.asIs(ctx, pkg), if (custom.exists()) custom.lastModified() else 0,
+            Prefs.pictureBack(ctx, pkg), Prefs.pictureColor(ctx, pkg),
         ).joinToString("|")
         resultCache[key]?.let { return it }
         return resultFresh(pkg, base).also { resultCache[key] = it }
@@ -193,7 +194,9 @@ class Builder(private val ctx: Context) {
             Prefs.Mode.CUSTOM -> {
                 val f = Prefs.customFile(ctx, pkg)
                 val b = if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
-                if (b != null && Prefs.asIs(ctx, pkg)) return Result(whole(b, base.pattern.width), Kind.CUSTOM, "Your image, as it is")
+                if (b != null && Prefs.asIs(ctx, pkg)) return Result(
+                    onBackground(b, base, Prefs.pictureBack(ctx, pkg), Prefs.pictureColor(ctx, pkg), Prefs.scale(ctx, pkg)),
+                    Kind.CUSTOM, "Your image, as it is")
                 val out = b?.let { GlyphEngine.fromImage(it, base.pattern, target, t, base.glyph) }
                 if (out != null) Result(out, Kind.CUSTOM, "Your image")
                 else Result(null, Kind.MISSING, "That image has no clear shape. Try one with a transparent background.")
@@ -371,6 +374,33 @@ class Builder(private val ctx: Context) {
         if (!ThemeStore.link(ctx, theme, orig)) return "Could not link the original icons"
         ThemeStore.restartThemes()
         return null
+    }
+
+    /**
+     * A picture used whole, optionally on a background: the look's own, or the look's shape
+     * in a chosen colour. On a background the picture shrinks to sit inside it as designed
+     * glyphs do; [scale] adjusts either way.
+     */
+    private fun onBackground(b: Bitmap, base: Base, back: String, color: Int, scale: Float): Bitmap {
+        val size = base.pattern.width
+        val out = when (back) {
+            "style" -> base.pattern.copy(Bitmap.Config.ARGB_8888, true)
+            "color" -> Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { o ->
+                // the look's shape, filled with the chosen colour
+                android.graphics.Canvas(o).drawBitmap(base.pattern, 0f, 0f, android.graphics.Paint().apply {
+                    colorFilter = android.graphics.PorterDuffColorFilter(color, android.graphics.PorterDuff.Mode.SRC_IN)
+                })
+            }
+            else -> Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        }
+        val fit = (if (back == "none") 1f else 0.62f) * scale
+        val box = size * fit
+        val sc = minOf(box / b.width, box / b.height)
+        val w = b.width * sc; val h = b.height * sc
+        android.graphics.Canvas(out).drawBitmap(b, null,
+            android.graphics.RectF((size - w) / 2, (size - h) / 2, (size + w) / 2, (size + h) / 2),
+            android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+        return out
     }
 
     /** A finished icon, fitted into the icon square without cropping. */
