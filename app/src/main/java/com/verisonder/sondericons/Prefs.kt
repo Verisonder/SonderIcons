@@ -32,6 +32,7 @@ object Prefs {
     fun originalIconsId(ctx: Context): String? = sp(ctx).getString("origIconsId", null)
     fun setOriginalIconsId(ctx: Context, id: String) = sp(ctx).edit().putString("origIconsId", id).apply()
 
-    fun themeId(ctx: Context): String? = sp(ctx).getString("themeId", null)
-    fun setThemeId(ctx: Context, id: String) = sp(ctx).edit().putString("themeId", id).apply()
+    /** A Theme backup the person chose by hand. Only used when the one on screen isn't a backup. */
+    fun chosenThemeId(ctx: Context): String? = sp(ctx).getString("chosenThemeId", null)
+    fun setChosenThemeId(ctx: Context, id: String?) = sp(ctx).edit().putString("chosenThemeId", id).apply()
 }

@@ -26,7 +26,7 @@ object ThemeStore {
     const val APPLIED_ICONS = "/data/system/theme/icons"
     const val THEMES_PKG = "com.android.thememanager"
 
-    class Theme(val id: String, val iconsId: String, val json: JSONObject)
+    class Theme(val id: String, val iconsId: String, val json: JSONObject, val savedAt: Long = 0)
 
     fun stage(ctx: Context): File = File(ctx.getExternalFilesDir(null), "stage").apply { mkdirs() }
 
@@ -48,33 +48,45 @@ object ThemeStore {
         return null
     }
 
+    /** Every "Theme backup" in the library, and which one is on screen now (if any). */
+    class Lookup(val themes: List<Theme>, val applied: Theme?)
+
     /**
-     * Finds the "Theme backup" this phone is using.
+     * Lists the "Theme backup" themes and works out which one is applied.
      *
-     * There can be several. The right one is whichever owns the icons that are applied
-     * now, matched by SHA-1 against `/data/system/theme/icons`, with [knownId] (the one this
-     * app linked last time) as the next best answer.
+     * The applied one is found by SHA-1: `/data/system/theme/icons` is a copy of one theme's
+     * icons file, and each icons file's metadata records its hash. A theme this app has
+     * linked but not yet been applied still counts if its *original* icons ([originalIconsId])
+     * are what is on screen. No match means the phone is on some other theme, and nothing
+     * is guessed: the person is asked.
      */
-    fun findBackupTheme(knownId: String?, ownIconsId: String?): Theme? {
+    fun lookup(ownIconsId: String?, originalIconsId: String?): Lookup {
         val list = Shell.run("grep -l '\"Theme backup\"' $DATA/meta/theme/*.mrm 2>/dev/null").text
             .lines().map { it.trim() }.filter { it.endsWith(".mrm") }
         val themes = list.mapNotNull { path ->
             val json = runCatching { JSONObject(String(read(path) ?: return@mapNotNull null)) }.getOrNull()
                 ?: return@mapNotNull null
             val icons = iconsIdOf(json) ?: return@mapNotNull null
-            Theme(json.optString("localId"), icons, json)
-        }
-        if (themes.isEmpty()) return null
+            val time = Shell.run("stat -c %Y ${Shell.q(path)}").text.trim().toLongOrNull() ?: 0L
+            Theme(json.optString("localId"), icons, json, time * 1000)
+        }.sortedByDescending { it.savedAt }
         val applied = Shell.run("sha1sum $APPLIED_ICONS").text.trim().split(" ").firstOrNull()
-        if (!applied.isNullOrEmpty()) {
-            themes.firstOrNull { t ->
-                val meta = read("$DATA/meta/icons/${t.iconsId}.mrm")?.let { runCatching { JSONObject(String(it)) }.getOrNull() }
-                meta?.optString("hash") == applied
-            }?.let { return it }
+        fun hashOf(iconsId: String?) = iconsId?.let { id ->
+            read("$DATA/meta/icons/$id.mrm")?.let { runCatching { JSONObject(String(it)).optString("hash") }.getOrNull() }
         }
-        return themes.firstOrNull { it.id == knownId }
-            ?: themes.firstOrNull { it.iconsId == ownIconsId }
-            ?: themes.first()
+        val match = if (applied.isNullOrEmpty()) null else themes.firstOrNull { t ->
+            hashOf(t.iconsId) == applied || (t.iconsId == ownIconsId && hashOf(originalIconsId) == applied)
+        }
+        return Lookup(themes, match)
+    }
+
+    /** The theme's launcher preview, if the Themes app kept one. */
+    fun preview(themeId: String): ByteArray? {
+        val dir = "$DATA/preview/theme/$themeId"
+        val name = Shell.run("ls ${Shell.q(dir)} 2>/dev/null").text.lines().map { it.trim() }
+            .let { names -> names.firstOrNull { it.contains("launcher_0") } ?: names.firstOrNull { it.endsWith(".jpg") || it.endsWith(".png") } }
+            ?: return null
+        return read("$dir/$name")
     }
 
     /** Points [theme]'s icons at [iconsId]. Returns false if the write did not land. */

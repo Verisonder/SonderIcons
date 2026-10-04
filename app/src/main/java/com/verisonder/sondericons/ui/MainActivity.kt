@@ -84,7 +84,9 @@ private fun Home(resumes: Int) {
 
     var shizuku by remember { mutableStateOf<Boolean?>(null) }       // null = not running
     var base by remember { mutableStateOf<Builder.Base?>(null) }
-    var noTheme by remember { mutableStateOf(false) }
+    var target by remember { mutableStateOf<Builder.Target?>(null) }
+    var picking by remember { mutableStateOf(false) }
+    var reload by remember { mutableIntStateOf(0) }
     var apps by remember { mutableStateOf<List<App>>(emptyList()) }
     val results = remember { mutableStateMapOf<String, Builder.Result>() }
     var query by remember { mutableStateOf("") }
@@ -112,13 +114,26 @@ private fun Home(resumes: Int) {
             apps = builder.launchablePackages().map { p ->
                 App(p, runCatching { pm.getApplicationLabel(pm.getApplicationInfo(p, 0)).toString() }.getOrDefault(p))
             }.sortedBy { it.label.lowercase() }
-            if (shizuku == true && base == null) {
-                val t = ThemeStore.findBackupTheme(Prefs.themeId(ctx), Prefs.ownIconsId(ctx))
-                base = t?.let { builder.loadBase(it) }
-                noTheme = t == null
+            if (shizuku == true) {
+                val t = builder.target()
+                // reread the theme only when the target changed; a resume alone shouldn't redraw everything
+                if (t.theme?.id != target?.theme?.id || base == null) {
+                    base = t.theme?.let { builder.loadBase(it) }
+                    results.clear()
+                }
+                target = t
             }
         }
         if (base != null && results.isEmpty()) refreshAll()
+    }
+
+    LaunchedEffect(reload) {
+        if (reload == 0) return@LaunchedEffect
+        withContext(Dispatchers.Default) {
+            val t = builder.target()
+            target = t; base = t.theme?.let { builder.loadBase(it) }
+        }
+        results.clear(); refreshAll()
     }
 
     val counts = remember(results.toMap()) { Filter.entries.associateWith { f -> apps.count { f.matches(results[it.pkg]?.kind) } } }
@@ -154,7 +169,7 @@ private fun Home(resumes: Int) {
         ) {
             item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
                 Header(
-                    shizuku = shizuku, noTheme = noTheme, ready = base != null, query = query, filter = filter, counts = counts,
+                    shizuku = shizuku, target = target, ready = base != null, onPick = { picking = true }, query = query, filter = filter, counts = counts,
                     onQuery = { query = it }, onFilter = { filter = it }, onSettings = { settings = true },
                     onAllow = { Shell.requestPermission() },
                     onOpenShizuku = { ctx.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")?.let { ctx.startActivity(it) } },
@@ -176,6 +191,11 @@ private fun Home(resumes: Int) {
     if (sheetApp != null && base != null) {
         AppSheet(sheetApp, results[sheetApp.pkg], builder, onDismiss = { open = null }, onChanged = { refresh(sheetApp.pkg) })
     }
+    if (picking) target?.let { t ->
+        ThemePicker(t, onDismiss = { picking = false }, onPick = { id ->
+            Prefs.setChosenThemeId(ctx, id); picking = false; reload++
+        })
+    }
     if (settings) SettingsSheet(
         ready = shizuku == true && base != null,
         onDismiss = { settings = false },
@@ -191,7 +211,7 @@ private fun Home(resumes: Int) {
 
 @Composable
 private fun Header(
-    shizuku: Boolean?, noTheme: Boolean, ready: Boolean, query: String, filter: Filter, counts: Map<Filter, Int>,
+    shizuku: Boolean?, target: Builder.Target?, ready: Boolean, onPick: () -> Unit, query: String, filter: Filter, counts: Map<Filter, Int>,
     onQuery: (String) -> Unit, onFilter: (Filter) -> Unit, onSettings: () -> Unit, onAllow: () -> Unit, onOpenShizuku: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(bottom = 6.dp)) {
@@ -203,8 +223,10 @@ private fun Header(
         when {
             shizuku == null -> Status("Shizuku isn't running.", "Open Shizuku", onOpenShizuku)
             shizuku == false -> Status("SonderIcons needs Shizuku access.", "Allow", onAllow)
-            noTheme -> Status("No Theme backup found. Make one in Themes, Customize theme.", null, null)
-            !ready -> Text("Reading your theme…", color = Palette.Muted)
+            target == null -> Text("Reading your theme…", color = Palette.Muted)
+            target.all.isEmpty() -> Status("No Theme backup found. In Themes, open Customize theme and save once.", null, null)
+            target.theme == null -> Status("Your current theme isn't a Theme backup.", "Choose", onPick)
+            else -> ThemeLine(target, onPick)
         }
         TextField(
             value = query, onValueChange = onQuery, singleLine = true,
@@ -241,6 +263,62 @@ private fun Header(
 @Composable
 private fun Modifier.horizontalScrollable(): Modifier =
     this.then(Modifier.horizontalScroll(rememberScrollState()))
+
+private fun savedOn(ms: Long): String =
+    if (ms <= 0) "" else java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(ms))
+
+/** Which theme a build changes. Tappable only when there is something else to choose. */
+@Composable
+private fun ThemeLine(t: Builder.Target, onPick: () -> Unit) {
+    val theme = t.theme ?: return
+    val choosable = t.all.size > 1 || !t.onScreen
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.weight(1f)) {
+            Text("Theme backup, saved ${savedOn(theme.savedAt)}", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (t.onScreen) "On screen now" else "Not on screen. Apply it in Themes after building.",
+                style = MaterialTheme.typography.labelSmall, color = if (t.onScreen) Palette.Muted else Palette.Red,
+            )
+        }
+        if (choosable) TextButton(onClick = onPick) { Text("Change") }
+    }
+}
+
+/** Every Theme backup, newest first, with the launcher preview the Themes app saved for it. */
+@Composable
+private fun ThemePicker(t: Builder.Target, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Palette.Circle) {
+        Column(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("Which theme should get the icons?", style = MaterialTheme.typography.titleMedium)
+            t.all.forEach { theme ->
+                val preview by produceState<Bitmap?>(null, theme.id) {
+                    value = withContext(Dispatchers.Default) {
+                        ThemeStore.preview(theme.id)?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
+                    }
+                }
+                val selected = theme.id == t.theme?.id
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                        .background(if (selected) Palette.Black else Palette.Circle)
+                        .clickable { onPick(theme.id) }.padding(10.dp),
+                ) {
+                    Box(Modifier.size(width = 54.dp, height = 96.dp).clip(RoundedCornerShape(10.dp)).background(Palette.Black)) {
+                        preview?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop) }
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Saved ${savedOn(theme.savedAt)}", style = MaterialTheme.typography.bodyMedium)
+                        if (theme.id == t.theme?.id && t.onScreen) Text("On screen now", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+                    }
+                    if (selected) Box(Modifier.size(10.dp).clip(CircleShape).background(Palette.White))
+                }
+            }
+            Text("Only Theme backups can be changed. Make one in Themes, Customize theme.",
+                style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+        }
+    }
+}
 
 @Composable
 private fun Status(text: String, action: String?, onAction: (() -> Unit)?) {

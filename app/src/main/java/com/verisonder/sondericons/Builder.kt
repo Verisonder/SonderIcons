@@ -32,6 +32,20 @@ class Builder(private val ctx: Context) {
 
     class Report(val made: Int, val needsOverride: List<String>, val error: String? = null)
 
+    /** Which theme a build would change, and whether that had to be chosen by hand. */
+    class Target(val theme: ThemeStore.Theme?, val onScreen: Boolean, val all: List<ThemeStore.Theme>)
+
+    /**
+     * The one on screen wins. Otherwise only a theme the person picked, never a guess:
+     * changing a backup that isn't applied does nothing visible and looks like a failure.
+     */
+    fun target(): Target {
+        val l = ThemeStore.lookup(Prefs.ownIconsId(ctx), Prefs.originalIconsId(ctx))
+        if (l.applied != null) return Target(l.applied, true, l.themes)
+        val chosen = l.themes.firstOrNull { it.id == Prefs.chosenThemeId(ctx) }
+        return Target(chosen, false, l.themes)
+    }
+
     /** The theme's original icons, read from the Themes app's library (never our own build). */
     fun loadBase(theme: ThemeStore.Theme): Base? {
         val own = Prefs.ownIconsId(ctx)
@@ -102,10 +116,11 @@ class Builder(private val ctx: Context) {
     fun build(progress: (String) -> Unit): Report {
         if (!Shell.available()) return Report(0, emptyList(), "Shizuku is not ready")
         val own = Prefs.ownIconsId(ctx)
-        progress("Finding Theme backup")
-        val theme = ThemeStore.findBackupTheme(Prefs.themeId(ctx), own)
-            ?: return Report(0, emptyList(), "No \"Theme backup\" found. Make one with Customize theme.")
-        Prefs.setThemeId(ctx, theme.id)
+        progress("Finding your theme")
+        val t = target()
+        val theme = t.theme ?: return Report(0, emptyList(),
+            if (t.all.isEmpty()) "No Theme backup found. In Themes, open Customize theme and save once."
+            else "Choose which Theme backup to change.")
         val base = loadBase(theme) ?: return Report(0, emptyList(), "Could not read the theme's icons")
 
         val made = LinkedHashMap<String, ByteArray>(); val needs = ArrayList<String>()
@@ -152,7 +167,7 @@ class Builder(private val ctx: Context) {
     /** Puts "Theme backup" back on the theme's own icons. */
     fun restore(): String? {
         if (!Shell.available()) return "Shizuku is not ready"
-        val theme = ThemeStore.findBackupTheme(Prefs.themeId(ctx), Prefs.ownIconsId(ctx)) ?: return "No Theme backup found"
+        val theme = target().theme ?: return "Choose which Theme backup to change first"
         val orig = Prefs.originalIconsId(ctx) ?: return "The original icons are not known"
         if (!ThemeStore.link(ctx, theme, orig)) return "Could not link the original icons"
         ThemeStore.restartThemes()
