@@ -196,7 +196,7 @@ private fun Home(resumes: Int) {
                 },
             ) else BuildBar(
                 enabled = shizuku == true && base != null && busy == null,
-                busy = busy, message = message,
+                busy = busy, message = message, built = built,
                 onBuild = {
                     busy = "Starting"; message = null
                     scope.launch {
