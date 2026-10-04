@@ -91,6 +91,9 @@ object Prefs {
     fun setReshaping(ctx: Context, r: Reshaping) = sp(ctx).edit().putBoolean("rs:on", r.on)
         .putString("rs:shape", r.shape.toJson()).putBoolean("rs:recolor", r.recolor).apply()
 
+    fun appTheme(ctx: Context): String = sp(ctx).getString("appTheme", "oled")!!
+    fun setAppTheme(ctx: Context, v: String) = sp(ctx).edit().putString("appTheme", v).apply()
+
     fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "$pkg.png")
 
     /** This app's own icons resource id. Made once, then kept, so rebuilds replace in place. */

@@ -64,12 +64,20 @@ class MainActivity : ComponentActivity() {
     private var resumes by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        Palette.apply(Prefs.appTheme(this))
+        bars()
         super.onCreate(savedInstanceState)
         setContent { SonderTheme { Surface(color = Palette.Black) { Home(resumes) } } }
     }
 
     override fun onResume() { super.onResume(); resumes++ }
+
+    /** Status and navigation bar icons dark on the light theme, light on the others. */
+    fun bars() {
+        val style = if (Palette.light) androidx.activity.SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                    else androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+    }
 }
 
 private class App(val pkg: String, val label: String)
@@ -945,15 +953,15 @@ private fun PreviewScreen(
                         Text(
                             label, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                             style = MaterialTheme.typography.labelSmall.copy(
-                                shadow = androidx.compose.ui.graphics.Shadow(Palette.Black, blurRadius = 6f)),
-                            color = Palette.White,
+                                shadow = androidx.compose.ui.graphics.Shadow(Color.Black, blurRadius = 6f)),
+                            color = Color.White,
                         )
-                        if (pkg == focus) Box(Modifier.padding(top = 4.dp).size(5.dp).clip(CircleShape).background(Palette.White))
+                        if (pkg == focus) Box(Modifier.padding(top = 4.dp).size(5.dp).clip(CircleShape).background(Color.White))
                     }
                 }
             }
             Text(
-                "Tap anywhere to close", color = Palette.White, style = MaterialTheme.typography.labelSmall,
+                "Tap anywhere to close", color = Color.White, style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 24.dp),
             )
         }
@@ -965,6 +973,16 @@ private fun SettingsSheet(ready: Boolean, onDismiss: () -> Unit, onScale: () -> 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Palette.Circle) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("Settings", style = MaterialTheme.typography.titleMedium)
+            val ctx = LocalContext.current
+            var theme by remember { mutableStateOf(Prefs.appTheme(ctx)) }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("App theme", style = MaterialTheme.typography.bodyMedium)
+                Segments(Palette.THEMES, theme) {
+                    theme = it; Prefs.setAppTheme(ctx, it); Palette.apply(it)
+                    (ctx as? MainActivity)?.bars()
+                }
+            }
+            HorizontalDivider(color = Palette.Line)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("How it works", style = MaterialTheme.typography.bodyMedium)
                 Text("Build icons writes them into Theme backup. Applying Theme backup in Themes puts them on screen. " +
