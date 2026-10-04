@@ -14,8 +14,8 @@ android {
         // monochrome glyph is the best icon source there is.
         minSdk = 33
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.2"
+        versionCode = 5
+        versionName = "1.2.1"
     }
 
     signingConfigs {
