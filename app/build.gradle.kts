@@ -38,9 +38,12 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Only the real key on CI. A local build without it is signed with the debug key
+            // and is for testing on your own device only.
             signingConfig = if (System.getenv("RELEASE_STORE_FILE") != null) {
                 signingConfigs.getByName("release")
             } else {
+                if (System.getenv("CI") != null) throw GradleException("RELEASE_STORE_FILE is not set on CI.")
                 signingConfigs.getByName("debug")
             }
         }

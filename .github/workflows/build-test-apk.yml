@@ -25,14 +25,15 @@ jobs:
         env:
           RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE }}
         run: |
-          # Without the key the release build falls back to the debug key, which still
-          # installs: this app has never been signed with anything else.
-          if [ -n "$RELEASE_KEYSTORE" ]; then
-            echo "$RELEASE_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-          else
-            echo "::warning::RELEASE_KEYSTORE is not set; signing with the debug key."
+          # No key, no build. A build signed with a throwaway key can't be installed over the
+          # last one, and anyone who installs it is stuck uninstalling to update.
+          if [ -z "$RELEASE_KEYSTORE" ]; then
+            echo "::error::RELEASE_KEYSTORE is not set. Nothing can be signed."
+            exit 1
           fi
+          echo "$RELEASE_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
       - name: Build
         shell: bash
         env:
