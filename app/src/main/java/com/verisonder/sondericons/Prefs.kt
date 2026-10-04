@@ -103,9 +103,9 @@ object Prefs {
     fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "${pkg.replace('/', '#')}.png")
 
     /** Pinned shortcuts and icons the look doesn't know. All off by default. */
-    data class ShortcutStyle(val background: String = "style", val hideArrow: Boolean = false, val fallback: String = "traced")
+    data class ShortcutStyle(val background: String = "style", val hideArrow: Boolean = false, val fallback: String = "none")
     fun shortcutStyle(ctx: Context) = sp(ctx).let {
-        ShortcutStyle(it.getString("sc:bg", "style")!!, it.getBoolean("sc:noArrow", false), it.getString("sc:fallback", "traced")!!)
+        ShortcutStyle(it.getString("sc:bg", "style")!!, it.getBoolean("sc:noArrow", false), it.getString("sc:fallback", "none")!!)
     }
     fun setShortcutStyle(ctx: Context, v: ShortcutStyle) = sp(ctx).edit().putString("sc:bg", v.background)
         .putBoolean("sc:noArrow", v.hideArrow).putString("sc:fallback", v.fallback).apply()

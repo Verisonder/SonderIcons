@@ -66,6 +66,10 @@ class Builder(private val ctx: Context) {
     /** The starting icon set for [style]. Throws [Unsupported] with a reason a person can act on. */
     // read and written from several background jobs at once (full redraws, single-app changes)
     private val baseCache = java.util.concurrent.ConcurrentHashMap<String, Base>()
+
+    /** Pinned shortcuts by key ("shortcut:package:id"), so they're drawn like any app. */
+    val pinned = java.util.concurrent.ConcurrentHashMap<String, PinnedShortcuts.Pinned>()
+    fun registerPinned(list: List<PinnedShortcuts.Pinned>) { list.forEach { pinned[it.key] = it } }
     private val resultCache = java.util.concurrent.ConcurrentHashMap<String, Result>()
 
     /** Everything a prepared look depends on. Same key, same base: no re-reading, no re-lifting glyphs. */
@@ -178,9 +182,12 @@ class Builder(private val ctx: Context) {
     }
 
     private fun resultFresh(pkg: String, base: Base): Result {
-        // [pkg] is an entry key: a package, or "package/activity" for an app's extra entries
-        val entry = entryOf(pkg)
+        // [pkg] is an entry key: a package, "package/activity" for an app's extra entries,
+        // or "shortcut:package:id" for a pinned shortcut
+        val shortcut = pinned[pkg]
+        val entry = if (shortcut != null) null else entryOf(pkg)
         val themedName = when {
+            shortcut != null -> null
             entry != null && entry.file in base.themed -> entry.file
             pkg.substringBefore('/') in base.themed -> pkg.substringBefore('/')
             else -> null
@@ -190,7 +197,7 @@ class Builder(private val ctx: Context) {
         return when (Prefs.mode(ctx, pkg)) {
             Prefs.Mode.THEME -> Result(themedName?.let { base.themeIcon(it) }, Kind.THEME,
                 if (themedName != null) "Designed icon" else "Left to the theme")
-            Prefs.Mode.LETTER -> Result(GlyphEngine.letter(entry?.label ?: label(pkg), base.pattern, target, t, base.glyph), Kind.CUSTOM, "First letter of its name")
+            Prefs.Mode.LETTER -> Result(GlyphEngine.letter(shortcut?.label ?: entry?.label ?: label(pkg), base.pattern, target, t, base.glyph), Kind.CUSTOM, "First letter of its name")
             Prefs.Mode.CUSTOM -> {
                 val f = Prefs.customFile(ctx, pkg)
                 val b = if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
@@ -203,9 +210,15 @@ class Builder(private val ctx: Context) {
             }
             Prefs.Mode.AUTO -> {
                 if (themedName != null) return Result(base.themeIcon(themedName), Kind.THEME, "Designed icon")
-                val ai = launcherActivities(pkg.substringBefore('/')).firstOrNull { entry == null || it.name == entry.cls }
-                    ?: return Result(null, Kind.MISSING, "Not on the home screen")
-                val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(rawIcon(ai) ?: ai.loadIcon(ctx.packageManager)), t)
+                val layers = if (shortcut != null) {
+                    val src = PinnedShortcuts.sourceIcon(ctx, shortcut) ?: return Result(null, Kind.MISSING, "This shortcut has no picture")
+                    GlyphEngine.Layers(null, null, null, Bitmap.createScaledBitmap(src, GlyphEngine.N, GlyphEngine.N, true))
+                } else {
+                    val ai = launcherActivities(pkg.substringBefore('/')).firstOrNull { entry == null || it.name == entry.cls }
+                        ?: return Result(null, Kind.MISSING, "Not on the home screen")
+                    GlyphEngine.layersOf(rawIcon(ai) ?: ai.loadIcon(ctx.packageManager))
+                }
+                val (mask, src) = GlyphEngine.pick(layers, t)
                 if (mask == null) Result(null, Kind.MISSING, "No clear shape found. Pick an image for it.")
                 else Result(GlyphEngine.render(mask, base.pattern, target, t, base.glyph), Kind.DRAWN, when (src) {
                     "mono", "mono-color" -> "From its monochrome icon"
@@ -233,7 +246,7 @@ class Builder(private val ctx: Context) {
     }.getOrDefault(pkg)
 
     /** The app's own icon, for the sheet. */
-    fun appIcon(pkg: String): Bitmap? = runCatching {
+    fun appIcon(pkg: String): Bitmap? = pinned[pkg]?.let { PinnedShortcuts.sourceIcon(ctx, it) } ?: runCatching {
         val e = entryOf(pkg)
         val ai = launcherActivities(pkg.substringBefore('/')).firstOrNull { e == null || it.name == e.cls }
         val d = ai?.let { rawIcon(it) } ?: ctx.packageManager.getApplicationIcon(pkg.substringBefore('/'))

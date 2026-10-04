@@ -248,7 +248,11 @@ private fun Home(resumes: Int) {
             if (filter == Filter.EXTRAS) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
                 Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     ShortcutsCard(base, onChanged = { built = false; message = null })
-                    PinnedList(base, shizuku == true, resumes)
+                    PinnedList(
+                        builder, shizuku == true, resumes, results,
+                        onLoaded = { list -> builder.registerPinned(list); list.forEach { refresh(it.key) } },
+                        onOpen = { p -> open = App(p.key, p.label) },
+                    )
                     if (extras.isNotEmpty()) Text("Second and alternative icons", style = MaterialTheme.typography.titleMedium)
                 }
             }
@@ -274,7 +278,8 @@ private fun Home(resumes: Int) {
 
     val sheetApp = open
     if (sheetApp != null && base != null) {
-        AppSheet(sheetApp, results[sheetApp.pkg], builder, onDismiss = { open = null }, onChanged = { built = false; message = null; refresh(sheetApp.pkg) },
+        AppSheet(sheetApp, results[sheetApp.pkg], builder, shortcut = builder.pinned[sheetApp.pkg],
+            onDismiss = { open = null }, onChanged = { built = false; message = null; refresh(sheetApp.pkg) },
             onPreview = { previewing = sheetApp })
     }
     previewing?.let { a ->
@@ -426,12 +431,17 @@ private fun ShortcutsCard(base: Builder.Base?, onChanged: () -> Unit) {
 
 /** Shortcuts pinned to the home screen, each of which can be replaced by a themed copy. */
 @Composable
-private fun PinnedList(base: Builder.Base?, ready: Boolean, resumes: Int) {
+private fun PinnedList(
+    builder: Builder, ready: Boolean, resumes: Int, results: Map<String, Builder.Result>,
+    onLoaded: (List<PinnedShortcuts.Pinned>) -> Unit, onOpen: (PinnedShortcuts.Pinned) -> Unit,
+) {
     val ctx = LocalContext.current
     var pinned by remember { mutableStateOf<List<PinnedShortcuts.Pinned>?>(null) }
-    var open by remember { mutableStateOf<PinnedShortcuts.Pinned?>(null) }
     LaunchedEffect(ready, resumes) {
-        if (ready) pinned = withContext(Dispatchers.Default) { runCatching { PinnedShortcuts.read(ctx.packageName) }.getOrDefault(emptyList()) }
+        if (ready) {
+            val list = withContext(Dispatchers.Default) { runCatching { PinnedShortcuts.read(ctx.packageName) }.getOrDefault(emptyList()) }
+            pinned = list; onLoaded(list)
+        }
     }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Pinned shortcuts", style = MaterialTheme.typography.titleMedium)
@@ -442,94 +452,21 @@ private fun PinnedList(base: Builder.Base?, ready: Boolean, resumes: Int) {
             pinned == null -> Text("Reading…", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
             pinned!!.isEmpty() -> Text("No shortcuts are pinned.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
             else -> pinned!!.forEach { p ->
-                val icon by produceState<Bitmap?>(null, p.key) { value = withContext(Dispatchers.Default) { PinnedShortcuts.sourceIcon(ctx, p) } }
                 val app = remember(p.pkg) {
                     runCatching { ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(p.pkg, 0)).toString() }.getOrDefault(p.pkg)
                 }
                 Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Circle).clickable { open = p }.padding(12.dp),
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Circle).clickable { onOpen(p) }.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(Modifier.size(44.dp).clip(CircleShape).background(Palette.Black), contentAlignment = Alignment.Center) {
-                        icon?.let { Image(it.asImageBitmap(), null, Modifier.size(36.dp)) }
-                    }
+                    IconCircle(results[p.key], p.key, builder, 48.dp)
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
                         Text(p.label, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("From $app", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
                     }
-                    Text("Copy", style = MaterialTheme.typography.bodyMedium)
+                    Text("Customize", style = MaterialTheme.typography.bodyMedium)
                 }
-            }
-        }
-    }
-    open?.let { p -> if (base != null) ShortcutSheet(p, base, onDismiss = { open = null }) else open = null }
-}
-
-/** A themed copy of one pinned shortcut: where its icon comes from, a preview, and pinning. */
-@Composable
-private fun ShortcutSheet(p: PinnedShortcuts.Pinned, base: Builder.Base, onDismiss: () -> Unit) {
-    val ctx = LocalContext.current
-    var source by remember { mutableStateOf("auto") }          // auto | letter | picture
-    var picture by remember { mutableStateOf<Bitmap?>(null) }
-    var pinned by remember { mutableStateOf(false) }
-    val packs = remember { IconPack.installed(ctx) }
-    var packFor by remember { mutableStateOf<IconPack?>(null) }
-    val picker = rememberLauncherForActivityResult(PickVisualMedia()) { uri: Uri? ->
-        uri?.let { u -> ctx.contentResolver.openInputStream(u)?.use { android.graphics.BitmapFactory.decodeStream(it) } }?.let {
-            picture = it; source = "picture"
-        }
-    }
-    val preview by produceState<Bitmap?>(null, source, picture) {
-        value = withContext(Dispatchers.Default) {
-            when (source) {
-                "letter" -> GlyphEngine.letter(p.label, base.pattern, base.target, color = base.glyph)
-                "picture" -> picture?.let { GlyphEngine.fromImage(it, base.pattern, base.target, color = base.glyph) }
-                else -> PinnedShortcuts.sourceIcon(ctx, p)?.let { src ->
-                    val (m, _) = GlyphEngine.pick(GlyphEngine.Layers(null, null, null, Bitmap.createScaledBitmap(src, GlyphEngine.N, GlyphEngine.N, true)))
-                    m?.let { GlyphEngine.render(it, base.pattern, base.target, color = base.glyph) }
-                }
-            }
-        }
-    }
-    packFor?.let { pk ->
-        PackIconPicker(pk, packs, initialQuery = p.label.split(' ').first(), onSwitch = { packFor = it }, onDismiss = { packFor = null },
-            onPick = { picture = it; source = "picture"; packFor = null })
-    }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Palette.Circle) {
-        Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(104.dp), contentAlignment = Alignment.Center) {
-                    preview?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize()) }
-                        ?: Text("No clear shape", style = MaterialTheme.typography.labelSmall, color = Palette.Red)
-                }
-                Spacer(Modifier.width(18.dp))
-                Column {
-                    Text(p.label, style = MaterialTheme.typography.titleMedium)
-                    Text("Opens the same thing as the original.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
-                }
-            }
-            Segments(listOf("auto" to "Auto", "letter" to "Letter", "picture" to "Picture"), source) {
-                if (it == "picture" && picture == null) picker.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) else source = it
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (packs.isNotEmpty()) OutlinedButton(onClick = { packFor = packs.first() }, modifier = Modifier.weight(1f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line)) { Text("Browse a pack", color = Palette.White) }
-                OutlinedButton(onClick = { picker.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) }, modifier = Modifier.weight(1f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line)) { Text("From gallery", color = Palette.White) }
-            }
-            Button(
-                onClick = { preview?.let { pinned = PinnedShortcuts.pinCopy(ctx, p, it) } },
-                enabled = preview != null, modifier = Modifier.fillMaxWidth().height(52.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Palette.White, contentColor = Palette.Black),
-            ) { Text("Pin themed copy") }
-            if (pinned) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Copy pinned.", style = MaterialTheme.typography.bodyMedium)
-                Text("Remove the original: long-press it, Remove.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
-                if (Prefs.shortcutStyle(ctx).fallback != "none") Text(
-                    "Set Unknown icons to As they are, then build and apply, or HyperOS will trace the copy too.",
-                    style = MaterialTheme.typography.labelSmall, color = Palette.Red)
             }
         }
     }
@@ -818,7 +755,10 @@ private fun SelectionBar(count: Int, onAll: () -> Unit, onClear: () -> Unit, onA
 
 /** Everything about one app: what it will look like, where that comes from, and how to change it. */
 @Composable
-private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: () -> Unit, onChanged: () -> Unit, onPreview: () -> Unit) {
+private fun AppSheet(
+    a: App, r: Builder.Result?, builder: Builder, shortcut: PinnedShortcuts.Pinned? = null,
+    onDismiss: () -> Unit, onChanged: () -> Unit, onPreview: () -> Unit,
+) {
     val ctx = LocalContext.current
     var mode by remember { mutableStateOf(Prefs.mode(ctx, a.pkg)) }
     var size by remember { mutableFloatStateOf(Prefs.scale(ctx, a.pkg)) }
@@ -858,7 +798,9 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
                 }
             }
 
+            // a theme can't reach a shortcut, so "Theme" isn't offered for one
             val options = listOf(Prefs.Mode.AUTO to "Auto", Prefs.Mode.CUSTOM to "Image", Prefs.Mode.LETTER to "Letter", Prefs.Mode.THEME to "Theme")
+                .filter { shortcut == null || it.first != Prefs.Mode.THEME }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 options.forEachIndexed { i, (m, label) ->
                     SegmentedButton(
@@ -937,6 +879,22 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
                 )
             }
 
+            if (shortcut != null) {
+                var pinnedCopy by remember { mutableStateOf(false) }
+                Button(
+                    onClick = { r?.bitmap?.let { pinnedCopy = PinnedShortcuts.pinCopy(ctx, shortcut, it) } },
+                    enabled = r?.bitmap != null, modifier = Modifier.fillMaxWidth().height(52.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Palette.White, contentColor = Palette.Black),
+                ) { Text("Pin themed copy") }
+                Text("Opens the same thing as the original.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+                if (pinnedCopy) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Copy pinned.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Remove the original: long-press it, Remove.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+                    if (Prefs.shortcutStyle(ctx).fallback != "none") Text(
+                        "Set Unknown icons to As they are, then build and apply, or HyperOS will trace the copy too.",
+                        style = MaterialTheme.typography.labelSmall, color = Palette.Red)
+                }
+            }
             OutlinedButton(
                 onClick = onPreview, enabled = r?.bitmap != null, modifier = Modifier.fillMaxWidth().height(48.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line),
@@ -1044,8 +1002,9 @@ private fun PickAnIcon(
     onUse: (Bitmap, Boolean) -> Unit, onLetter: () -> Unit,
 ) {
     val pkg = a.pkg.substringBefore('/'); val cls = a.pkg.substringAfter('/', "").ifEmpty { null }
+    val isShortcut = a.pkg.startsWith("shortcut:")
     val suggestions by produceState(emptyList<Pair<String, Bitmap>>(), a.pkg, packs) {
-        value = withContext(Dispatchers.Default) {
+        value = if (isShortcut) emptyList() else withContext(Dispatchers.Default) {
             packs.mapNotNull { p -> p.covers(pkg, cls)?.let { n -> p.bitmap(n, 432)?.let { p.label to it } } }
         }
     }
@@ -1065,7 +1024,7 @@ private fun PickAnIcon(
                 Text("Letter", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
             }
         }
-        if (suggestions.isEmpty() && packs.isNotEmpty())
+        if (!isShortcut && suggestions.isEmpty() && packs.isNotEmpty())
             Text("No installed pack has an icon made for this app.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (packs.isNotEmpty()) OutlinedButton(
