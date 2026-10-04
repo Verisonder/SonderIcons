@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Only ever fired by pushing a tag, so a release is always something someone decided to do.
+jobs:
+  release:
+    name: Build and publish a release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Checked before anything is built: a tag that disagrees with versionName would
+      # publish an APK reporting the wrong version, and missing notes would fail last.
+      - name: Check the tag against the source
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES="docs/releasenote/release_notes_${GITHUB_REF_NAME}.md"
+          [ -f "$NOTES" ] || { echo "::error::$NOTES does not exist. Write the release notes before tagging."; exit 1; }
+          DECLARED=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -n 1)
+          [ "$DECLARED" = "$VERSION" ] || { echo "::error::Tag $GITHUB_REF_NAME says $VERSION, app/build.gradle.kts says $DECLARED."; exit 1; }
+          echo "Tag $GITHUB_REF_NAME matches versionName $DECLARED."
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Restore the signing key
+        shell: bash
+        env:
+          RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE" ]; then
+            echo "$RELEASE_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::RELEASE_KEYSTORE is not set; this release is signed with a throwaway debug key."
+          fi
+
+      - name: Build
+        shell: bash
+        env:
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          if ! gradle --no-daemon assembleRelease > build.txt 2>&1; then
+            tail -n 80 build.txt
+            grep -E "^e: |error:" build.txt | head -n 40 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          [ -n "$APK" ] || { echo "::error::No APK was produced."; exit 1; }
+          cp "$APK" "SonderIcons-$VERSION.apk"
+          gh release create "$GITHUB_REF_NAME" "SonderIcons-$VERSION.apk" \
+            --repo "$GITHUB_REPOSITORY" --title "SonderIcons $VERSION" \
+            --notes-file "docs/releasenote/release_notes_${GITHUB_REF_NAME}.md"
