@@ -154,7 +154,7 @@ object GlyphEngine {
      * Draws [m] white, centred on [pattern], sized to [target] px across (the theme's own
      * glyph size). Specks outside the main shape are ignored when sizing.
      */
-    fun render(m: FloatArray, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning()): Bitmap {
+    fun render(m: FloatArray, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning(), color: Int = Color.WHITE): Bitmap {
         val xs = ArrayList<Int>(); val ys = ArrayList<Int>()
         for (i in m.indices) if (m[i] > 0.16f) { xs += i % N; ys += i / N }
         xs.sort(); ys.sort()
@@ -186,12 +186,16 @@ object GlyphEngine {
         }
         if (t.crisp) g = crisp(g)
         val result = pattern.copy(Bitmap.Config.ARGB_8888, true)
-        Canvas(result).drawBitmap(g, ((result.width - g.width) / 2f), ((result.height - g.height) / 2f), Paint(Paint.FILTER_BITMAP_FLAG))
+        // the glyph is built as a white mask; the style's colour is applied here, once
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = android.graphics.PorterDuffColorFilter(color, android.graphics.PorterDuff.Mode.SRC_IN)
+        }
+        Canvas(result).drawBitmap(g, ((result.width - g.width) / 2f), ((result.height - g.height) / 2f), paint)
         return result
     }
 
     /** The first letter of the app's name, for icons with no usable shape (photos, game art). */
-    fun letter(label: String, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning()): Bitmap {
+    fun letter(label: String, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning(), color: Int = Color.WHITE): Bitmap {
         val ch = label.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "?"
         val b = Bitmap.createBitmap(N, N, Bitmap.Config.ARGB_8888)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -201,16 +205,16 @@ object GlyphEngine {
         val y = N / 2f - (p.descent() + p.ascent()) / 2f
         Canvas(b).drawText(ch, N / 2f, y, p)
         // letters read heavier than glyphs at the same size, so they sit a little smaller
-        return render(alphaMask(b), pattern, (target * 0.9f).toInt(), t)
+        return render(alphaMask(b), pattern, (target * 0.9f).toInt(), t, color)
     }
 
     /** A picture the person chose: its shape if it has transparency, else its logo by colour. */
-    fun fromImage(b: Bitmap, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning()): Bitmap? {
+    fun fromImage(b: Bitmap, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning(), color: Int = Color.WHITE): Bitmap? {
         val big = Bitmap.createScaledBitmap(b.copy(Bitmap.Config.ARGB_8888, false), N, N, true)
         val a = alphaMask(big)
         val m = if (judge(a, trusted = true) == null) a else colorMask(big, t.sensitivity)
         if (judge(m, trusted = true) != null) return null
-        return render(m!!, pattern, target, t)
+        return render(m!!, pattern, target, t, color)
     }
 
     // ---------------- helpers ----------------

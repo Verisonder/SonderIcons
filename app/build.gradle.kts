@@ -52,6 +52,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    // the bundled icon set is a zip of PNGs; compressing it again gains nothing
+    androidResources { noCompress += "zip" }
 }
 
 dependencies {

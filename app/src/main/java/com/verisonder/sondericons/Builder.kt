@@ -22,7 +22,10 @@ import java.util.zip.ZipOutputStream
 class Builder(private val ctx: Context) {
 
     /** The theme's original icons file, entry by entry, in order. */
-    class Base(val entries: LinkedHashMap<String, ByteArray>, val themed: Set<String>, val pattern: Bitmap, val dir: String, val target: Int) {
+    class Base(
+        val entries: LinkedHashMap<String, ByteArray>, val themed: Set<String>, val pattern: Bitmap,
+        val dir: String, val target: Int, val glyph: Int, val style: Style,
+    ) {
         fun themeIcon(pkg: String): Bitmap? = entries[dir + pkg + ".png"]?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
     }
 
@@ -46,31 +49,54 @@ class Builder(private val ctx: Context) {
         return Target(chosen, false, l.themes)
     }
 
-    /** The theme's original icons, read from the Themes app's library (never our own build). */
-    fun loadBase(theme: ThemeStore.Theme): Base? {
-        // Start from the designer's icons, never from a file we wrote: building on our own
-        // output would keep icons from apps since uninstalled and count ours as the theme's.
+    /**
+     * The theme's own icons file id, remembered for restoring. Never one we wrote:
+     * building on our own output would keep icons of apps since uninstalled.
+     */
+    fun originalIcons(theme: ThemeStore.Theme): String? {
         val current = theme.iconsId
-        val origId = if (current != Prefs.ownIconsId(ctx) && !ThemeStore.isOurs(current)) current
-                     else Prefs.originalIconsId(ctx)?.takeIf { !ThemeStore.isOurs(it) }
-                         ?: ThemeStore.findOriginalIcons(theme.id) ?: return null
-        Prefs.setOriginalIconsId(ctx, origId)
-        val zip = ThemeStore.read("${ThemeStore.DATA}/content/icons/$origId.mrc") ?: return null
+        val id = if (current != Prefs.ownIconsId(ctx) && !ThemeStore.isOurs(current)) current
+                 else Prefs.originalIconsId(ctx)?.takeIf { !ThemeStore.isOurs(it) } ?: ThemeStore.findOriginalIcons(theme.id)
+        id?.let { Prefs.setOriginalIconsId(ctx, it) }
+        return id
+    }
+
+    class Unsupported(message: String) : Exception(message)
+
+    /** The starting icon set for [style]. Throws [Unsupported] with a reason a person can act on. */
+    fun loadBase(theme: ThemeStore.Theme, style: Style = Style.byId(Prefs.styleId(ctx))): Base {
+        val origId = originalIcons(theme)
         val entries = LinkedHashMap<String, ByteArray>()
-        ZipInputStream(ByteArrayInputStream(zip)).use { z ->
-            while (true) {
-                val e = z.nextEntry ?: break
-                if (!e.isDirectory) entries[e.name] = z.readBytes()
-            }
+        fun unzip(bytes: ByteArray) = ZipInputStream(ByteArrayInputStream(bytes)).use { z ->
+            while (true) { val e = z.nextEntry ?: break; if (!e.isDirectory) entries[e.name] = z.readBytes() }
         }
-        val patternName = entries.keys.firstOrNull { it.endsWith("/icon_pattern.png") } ?: return null
-        val dir = patternName.substringBeforeLast('/') + "/"
-        val pb = entries.getValue(patternName)
-        val pattern = BitmapFactory.decodeByteArray(pb, 0, pb.size) ?: return null
-        val themed = entries.keys.filter { it.startsWith(dir) && it.endsWith(".png") }
-            .map { it.removePrefix(dir).removeSuffix(".png") }.toSet()
-        // the theme's own glyphs measured 58px on a 180px icon; scale with the pattern
-        return Base(entries, themed, pattern, dir, (pattern.width * 58f / 180f).toInt())
+        when (style.kind) {
+            StyleKind.SET -> unzip(ctx.assets.open(style.asset!!).use { it.readBytes() })
+            StyleKind.THEME -> unzip(origId?.let { ThemeStore.read("${ThemeStore.DATA}/content/icons/$it.mrc") }
+                ?: throw Unsupported("Couldn't read your theme's icons."))
+            StyleKind.DRAWN -> {}
+        }
+        val dir = entries.keys.firstOrNull { it.endsWith("/icon_pattern.png") }?.substringBeforeLast('/')?.plus("/")
+            ?: "res/drawable-xxhdpi/"
+        val pattern: Bitmap = when (style.kind) {
+            StyleKind.DRAWN -> style.pattern()
+            else -> entries[dir + "icon_pattern.png"]?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                ?: throw Unsupported("Your theme has no plain icon background to draw on. Pick another style.")
+        }
+        // a drawn style ships its background too, so folders and anything uncovered match it
+        if (style.kind == StyleKind.DRAWN) entries[dir + "icon_pattern.png"] = png(pattern)
+        val themed = if (style.kind == StyleKind.DRAWN) emptySet()
+            else entries.keys.filter { it.startsWith(dir) && it.endsWith(".png") && !it.substringAfterLast('/').startsWith("icon_") }
+                .map { it.removePrefix(dir).removeSuffix(".png") }.toSet()
+        val glyph = when (style.kind) {
+            StyleKind.THEME -> StyleDetect.glyphColor(
+                themed.shuffled(java.util.Random(1)).take(60).mapNotNull { n ->
+                    entries[dir + n + ".png"]?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                }, pattern)
+            else -> style.glyph
+        }
+        // the designed glyphs measured 58px on a 180px icon; scale with the background
+        return Base(entries, themed, pattern, dir, (pattern.width * 58f / 180f).toInt(), glyph, style)
     }
 
     /** What [pkg] will look like after a build, with a reason a person can read. */
@@ -79,23 +105,23 @@ class Builder(private val ctx: Context) {
         val t = Prefs.tuning(ctx, pkg)
         return when (Prefs.mode(ctx, pkg)) {
             Prefs.Mode.THEME -> Result(base.themeIcon(pkg), Kind.THEME,
-                if (pkg in base.themed) "Theme icon" else "Theme's traced outline")
-            Prefs.Mode.LETTER -> Result(GlyphEngine.letter(label(pkg), base.pattern, target, t), Kind.CUSTOM, "First letter of its name")
+                if (pkg in base.themed) "Designed icon" else "Left to the theme")
+            Prefs.Mode.LETTER -> Result(GlyphEngine.letter(label(pkg), base.pattern, target, t, base.glyph), Kind.CUSTOM, "First letter of its name")
             Prefs.Mode.CUSTOM -> {
                 val f = Prefs.customFile(ctx, pkg)
                 val b = if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
-                val out = b?.let { GlyphEngine.fromImage(it, base.pattern, target, t) }
+                val out = b?.let { GlyphEngine.fromImage(it, base.pattern, target, t, base.glyph) }
                 if (out != null) Result(out, Kind.CUSTOM, "Your image")
                 else Result(null, Kind.MISSING, "That image has no clear shape. Try one with a transparent background.")
             }
             Prefs.Mode.AUTO -> {
-                if (pkg in base.themed) return Result(base.themeIcon(pkg), Kind.THEME, "Theme icon")
+                if (pkg in base.themed) return Result(base.themeIcon(pkg), Kind.THEME, "Designed icon")
                 val la = ctx.getSystemService(LauncherApps::class.java)
                 val info = la.getActivityList(pkg, Process.myUserHandle()).firstOrNull()
                     ?: return Result(null, Kind.MISSING, "Not on the home screen")
                 val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(rawIcon(info.activityInfo) ?: info.getIcon(0)), t)
                 if (mask == null) Result(null, Kind.MISSING, "No clear shape found. Pick an image for it.")
-                else Result(GlyphEngine.render(mask, base.pattern, target, t), Kind.DRAWN, when (src) {
+                else Result(GlyphEngine.render(mask, base.pattern, target, t, base.glyph), Kind.DRAWN, when (src) {
                     "mono", "mono-color" -> "From its monochrome icon"
                     "fg" -> "From its icon's shape"
                     else -> "Cut out of its icon"
@@ -145,7 +171,7 @@ class Builder(private val ctx: Context) {
         val theme = t.theme ?: return Report(0, emptyList(),
             if (t.all.isEmpty()) "No Theme backup found. In Themes, open Customize theme and save once."
             else "Choose which Theme backup to change.")
-        val base = loadBase(theme) ?: return Report(0, emptyList(), "Could not read the theme's icons")
+        val base = try { loadBase(theme) } catch (e: Unsupported) { return Report(0, emptyList(), e.message) }
 
         val made = LinkedHashMap<String, ByteArray>(); val needs = ArrayList<String>()
         val pkgs = launchablePackages()
@@ -164,9 +190,9 @@ class Builder(private val ctx: Context) {
         val stage = ThemeStore.stage(ctx)
         val mrc = File(stage, "$own.mrc").apply { writeBytes(zip) }
         val sha = ThemeStore.sha1(zip)
-        val origId = Prefs.originalIconsId(ctx)!!
-        val meta = ThemeStore.read("${ThemeStore.DATA}/meta/icons/$origId.mrm")
-            ?.let { runCatching { JSONObject(String(it)) }.getOrNull() } ?: JSONObject()
+        val origId = Prefs.originalIconsId(ctx)
+        val meta = origId?.let { ThemeStore.read("${ThemeStore.DATA}/meta/icons/$it.mrm") }
+            ?.let { runCatching { JSONObject(String(it)) }.getOrNull() } ?: JSONObject().put("platform", 15).put("version", "1.0")
         meta.put("localId", own).put("hash", sha).put("size", zip.size)
             .put("onlineId", JSONObject.NULL).put("rightsPath", JSONObject.NULL)
             .put("titles", JSONObject().put("fallback", "SonderIcons"))

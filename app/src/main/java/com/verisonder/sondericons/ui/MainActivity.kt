@@ -49,6 +49,8 @@ import com.verisonder.sondericons.Builder.Kind
 import com.verisonder.sondericons.Prefs
 import com.verisonder.sondericons.Shell
 import com.verisonder.sondericons.ThemeStore
+import com.verisonder.sondericons.Style
+import com.verisonder.sondericons.StyleKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -69,7 +71,9 @@ class MainActivity : ComponentActivity() {
 
 private class App(val pkg: String, val label: String)
 
-private enum class Filter(val title: String) { ALL("All"), DRAWN("Drawn"), YOURS("Yours"), THEME("Theme"), MISSING("Missing") }
+private const val SHIZUKU = "moe.shizuku.privileged.api"
+
+private enum class Filter(val title: String) { ALL("All"), DRAWN("Drawn"), YOURS("Yours"), THEME("Designed"), MISSING("Missing") }
 
 private fun Filter.matches(k: Kind?) = when (this) {
     Filter.ALL -> true
@@ -85,7 +89,8 @@ private fun Home(resumes: Int) {
     val scope = rememberCoroutineScope()
     val builder = remember { Builder(ctx) }
 
-    var shizuku by remember { mutableStateOf<Boolean?>(null) }       // null = not running
+    // read at once so the setup screen doesn't flash past on every launch
+    var shizuku by remember { mutableStateOf(when { Shell.available() -> true; Shell.running() -> false; else -> null }) }
     var base by remember { mutableStateOf<Builder.Base?>(null) }
     var target by remember { mutableStateOf<Builder.Target?>(null) }
     var picking by remember { mutableStateOf(false) }
@@ -99,6 +104,11 @@ private fun Home(resumes: Int) {
     var busy by remember { mutableStateOf<String?>(null) }
     val selected = remember { mutableStateListOf<String>() }
     var previewing by remember { mutableStateOf<App?>(null) }
+    var style by remember { mutableStateOf(Style.byId(Prefs.styleId(ctx))) }
+    var styleError by remember { mutableStateOf<String?>(null) }
+    fun load(t: Builder.Target): Builder.Base? = t.theme?.let {
+        try { builder.loadBase(it).also { styleError = null } } catch (e: Builder.Unsupported) { styleError = e.message; null }
+    }
     var message by remember { mutableStateOf<String?>(null) }
 
     fun refresh(pkg: String) = scope.launch {
@@ -123,7 +133,7 @@ private fun Home(resumes: Int) {
                 val t = builder.target()
                 // reread the theme only when the target changed; a resume alone shouldn't redraw everything
                 if (t.theme?.id != target?.theme?.id || base == null) {
-                    base = t.theme?.let { builder.loadBase(it) }
+                    base = load(t)
                     results.clear()
                 }
                 target = t
@@ -136,7 +146,7 @@ private fun Home(resumes: Int) {
         if (reload == 0) return@LaunchedEffect
         withContext(Dispatchers.Default) {
             val t = builder.target()
-            target = t; base = t.theme?.let { builder.loadBase(it) }
+            target = t; base = load(t)
         }
         results.clear(); refreshAll()
     }
@@ -145,6 +155,19 @@ private fun Home(resumes: Int) {
     val shown = apps.filter { a ->
         (query.isBlank() || a.label.contains(query, true) || a.pkg.contains(query, true)) &&
             (filter == Filter.ALL || filter.matches(results[a.pkg]?.kind))
+    }
+
+    val hasShizuku = remember(resumes) { ctx.packageManager.getLaunchIntentForPackage(SHIZUKU) != null }
+    if (shizuku != true || target?.all?.isEmpty() == true) {
+        Setup(
+            installed = hasShizuku, shizuku = shizuku, hasBackup = target?.all?.isNotEmpty(),
+            onInstall = { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                Uri.parse("https://play.google.com/store/apps/details?id=$SHIZUKU"))) },
+            onOpenShizuku = { ctx.packageManager.getLaunchIntentForPackage(SHIZUKU)?.let { ctx.startActivity(it) } },
+            onAllow = { Shell.requestPermission() },
+            onOpenThemes = { ctx.packageManager.getLaunchIntentForPackage(ThemeStore.THEMES_PKG)?.let { ctx.startActivity(it) } },
+        )
+        return
     }
 
     Scaffold(
@@ -188,7 +211,9 @@ private fun Home(resumes: Int) {
         ) {
             item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
                 Header(
-                    shizuku = shizuku, target = target, ready = base != null, onPick = { picking = true }, query = query, filter = filter, counts = counts,
+                    shizuku = shizuku, target = target, ready = base != null, onPick = { picking = true },
+                    style = style, styleError = styleError,
+                    onStyle = { st -> style = st; Prefs.setStyleId(ctx, st.id); reload++ }, query = query, filter = filter, counts = counts,
                     onQuery = { query = it }, onFilter = { filter = it }, onSettings = { settings = true },
                     onAllow = { Shell.requestPermission() },
                     onOpenShizuku = { ctx.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")?.let { ctx.startActivity(it) } },
@@ -247,7 +272,8 @@ private fun Home(resumes: Int) {
 
 @Composable
 private fun Header(
-    shizuku: Boolean?, target: Builder.Target?, ready: Boolean, onPick: () -> Unit, query: String, filter: Filter, counts: Map<Filter, Int>,
+    shizuku: Boolean?, target: Builder.Target?, ready: Boolean, onPick: () -> Unit,
+    style: Style, styleError: String?, onStyle: (Style) -> Unit, query: String, filter: Filter, counts: Map<Filter, Int>,
     onQuery: (String) -> Unit, onFilter: (Filter) -> Unit, onSettings: () -> Unit, onAllow: () -> Unit, onOpenShizuku: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(bottom = 6.dp)) {
@@ -264,6 +290,8 @@ private fun Header(
             target.theme == null -> Status("Your current theme isn't a Theme backup.", "Choose", onPick)
             else -> ThemeLine(target, onPick)
         }
+        if (target?.theme != null) StylePicker(style, onStyle)
+        styleError?.let { Status(it, null, null) }
         TextField(
             value = query, onValueChange = onQuery, singleLine = true,
             placeholder = { Text("Search apps") },
@@ -302,6 +330,120 @@ private fun Modifier.horizontalScrollable(): Modifier =
 
 private fun savedOn(ms: Long): String =
     if (ms <= 0) "" else java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(ms))
+
+/** One designed icon from a bundled set, to show what the set looks like. */
+private fun sampleIcon(ctx: android.content.Context, asset: String): Bitmap? = runCatching {
+    java.util.zip.ZipInputStream(ctx.assets.open(asset)).use { z ->
+        while (true) {
+            val e = z.nextEntry ?: return@use null
+            if (e.name.endsWith("/com.whatsapp.png")) {
+                val bytes = z.readBytes()
+                return@use android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }
+        }
+        null
+    }
+}.getOrNull()
+
+/** The look of every icon. A small swatch of each, since names alone don't show it. */
+@Composable
+private fun StylePicker(current: Style, onPick: (Style) -> Unit) {
+    val ctx = LocalContext.current
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+        Style.ALL.forEach { st ->
+            val swatch = remember(st.id) {
+                when (st.kind) {
+                    StyleKind.DRAWN -> st.pattern(96)
+                    StyleKind.SET -> sampleIcon(ctx, st.asset!!)
+                    StyleKind.THEME -> null
+                }
+            }
+            val selected = st.id == current.id
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onPick(st) }) {
+                Box(
+                    Modifier.size(52.dp).clip(CircleShape)
+                        .border(2.dp, if (selected) Palette.White else Palette.Black, CircleShape).padding(4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (swatch != null) Image(swatch.asImageBitmap(), null, Modifier.fillMaxSize())
+                    else Box(Modifier.fillMaxSize().clip(CircleShape).background(Palette.Circle), contentAlignment = Alignment.Center) {
+                        Text("Aa", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(st.label, style = MaterialTheme.typography.labelSmall, color = if (selected) Palette.White else Palette.Muted)
+            }
+        }
+    }
+}
+
+/**
+ * First run, and whenever something is missing: the steps in order, each with what to do
+ * and a tick once it's done. Replaces the app until everything is in place.
+ */
+@Composable
+private fun Setup(
+    installed: Boolean, shizuku: Boolean?, hasBackup: Boolean?,
+    onInstall: () -> Unit, onOpenShizuku: () -> Unit, onAllow: () -> Unit, onOpenThemes: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().background(Palette.Black).systemBarsPadding().verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(28.dp),
+    ) {
+        Text("SonderIcons", style = MaterialTheme.typography.headlineMedium)
+        Text("Two things to set up once. After that it's one button.", style = MaterialTheme.typography.bodyMedium, color = Palette.Muted)
+
+        Step(
+            done = shizuku == true,
+            title = "Shizuku",
+            body = when {
+                !installed -> "SonderIcons changes your theme through Shizuku. Install it, then start it with Wireless debugging."
+                shizuku == null -> "Open Shizuku and start it with Wireless debugging. After a restart, start it again."
+                shizuku == false -> "Shizuku is running. Allow SonderIcons to use it."
+                else -> "Ready."
+            },
+            action = when {
+                !installed -> "Install Shizuku" to onInstall
+                shizuku == null -> "Open Shizuku" to onOpenShizuku
+                shizuku == false -> "Allow" to onAllow
+                else -> null
+            },
+        )
+        Step(
+            done = hasBackup == true,
+            title = "Theme backup",
+            body = when (hasBackup) {
+                null -> "Checked once Shizuku is ready."
+                true -> "Ready."
+                false -> "SonderIcons puts its icons into the theme HyperOS calls Theme backup. " +
+                    "To make one: in Themes, open Customize theme, change any part, and apply."
+            },
+            action = if (hasBackup == false) "Open Themes" to onOpenThemes else null,
+        )
+    }
+}
+
+@Composable
+private fun Step(done: Boolean, title: String, body: String, action: Pair<String, () -> Unit>?) {
+    Row {
+        Box(
+            Modifier.size(26.dp).clip(CircleShape).background(if (done) Palette.White else Palette.Circle),
+            contentAlignment = Alignment.Center,
+        ) { if (done) Text("✓", color = Palette.Black, style = MaterialTheme.typography.bodyMedium) }
+        Spacer(Modifier.width(16.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = if (done) Palette.Muted else Palette.White)
+            Text(body, style = MaterialTheme.typography.bodyMedium, color = Palette.Muted)
+            action?.let { (label, go) ->
+                Button(
+                    onClick = go, modifier = Modifier.padding(top = 4.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Palette.White, contentColor = Palette.Black),
+                ) { Text(label) }
+            }
+        }
+    }
+}
 
 /** Which theme a build changes. Tappable only when there is something else to choose. */
 @Composable

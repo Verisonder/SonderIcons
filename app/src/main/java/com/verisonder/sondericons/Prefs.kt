@@ -54,6 +54,9 @@ object Prefs {
     fun clearTuning(ctx: Context, pkg: String) = sp(ctx).edit()
         .remove("t:source:$pkg").remove("t:stroke:$pkg").remove("t:sens:$pkg").remove("t:crisp:$pkg").apply()
 
+    fun styleId(ctx: Context): String? = sp(ctx).getString("style", null)
+    fun setStyleId(ctx: Context, id: String) = sp(ctx).edit().putString("style", id).apply()
+
     fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "$pkg.png")
 
     /** This app's own icons resource id. Made once, then kept, so rebuilds replace in place. */
