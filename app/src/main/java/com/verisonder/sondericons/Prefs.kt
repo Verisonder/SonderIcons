@@ -64,6 +64,25 @@ object Prefs {
     fun asIs(ctx: Context, pkg: String) = sp(ctx).getBoolean("asis:$pkg", false)
     fun setAsIs(ctx: Context, pkg: String, v: Boolean) = sp(ctx).edit().putBoolean("asis:$pkg", v).apply()
 
+    /** What apps an icon pack doesn't cover sit on: "pack" (its iconback), "none", or "shape". */
+    fun packBack(ctx: Context): String = sp(ctx).getString("packBack", "pack")!!
+    fun setPackBack(ctx: Context, v: String) = sp(ctx).edit().putString("packBack", v).apply()
+
+    /** Quick toggles: follow the style, or the person's own colours and shape. */
+    data class Toggles(
+        val custom: Boolean = false, val form: String = "circle", val corner: Float = 0.3f,
+        val onBg: Int = 0xFFD71921.toInt(), val onGlyph: Int = android.graphics.Color.WHITE,
+        val offBg: Int = 0xFF1C1C1C.toInt(), val offGlyph: Int = android.graphics.Color.WHITE,
+    )
+    fun toggles(ctx: Context): Toggles = sp(ctx).let {
+        Toggles(it.getBoolean("tg:custom", false), it.getString("tg:form", "circle")!!, it.getFloat("tg:corner", 0.3f),
+            it.getInt("tg:onBg", 0xFFD71921.toInt()), it.getInt("tg:onGlyph", android.graphics.Color.WHITE),
+            it.getInt("tg:offBg", 0xFF1C1C1C.toInt()), it.getInt("tg:offGlyph", android.graphics.Color.WHITE))
+    }
+    fun setToggles(ctx: Context, t: Toggles) = sp(ctx).edit().putBoolean("tg:custom", t.custom).putString("tg:form", t.form)
+        .putFloat("tg:corner", t.corner).putInt("tg:onBg", t.onBg).putInt("tg:onGlyph", t.onGlyph)
+        .putInt("tg:offBg", t.offBg).putInt("tg:offGlyph", t.offGlyph).apply()
+
     fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "$pkg.png")
 
     /** This app's own icons resource id. Made once, then kept, so rebuilds replace in place. */

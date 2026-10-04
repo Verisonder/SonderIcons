@@ -83,7 +83,11 @@ class Builder(private val ctx: Context) {
             ?: "res/drawable-xxhdpi/"
         val pattern: Bitmap = when (style.kind) {
             StyleKind.DRAWN -> style.pattern()
-            StyleKind.PACK -> pack!!.backs.firstNotNullOfOrNull { pack.bitmap(it) } ?: style.pattern()
+            StyleKind.PACK -> when (Prefs.packBack(ctx)) {
+                "none" -> Shape("none").draw()
+                "shape" -> Prefs.customShape(ctx).draw()
+                else -> pack!!.backs.firstNotNullOfOrNull { pack.bitmap(it) } ?: Prefs.customShape(ctx).draw()
+            }
             else -> entries[dir + "icon_pattern.png"]?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
                 ?: throw Unsupported("Your theme has no plain icon background to draw on. Pick another style.")
         }
@@ -102,7 +106,7 @@ class Builder(private val ctx: Context) {
                 .map { it.removePrefix(dir).removeSuffix(".png") }.toSet()
         val glyph = when (style.kind) {
             // on a pack's iconback: white or black, whichever reads on its centre
-            StyleKind.PACK -> if (pack!!.backs.isEmpty()) style.glyph else {
+            StyleKind.PACK -> if (Prefs.packBack(ctx) != "pack" || pack!!.backs.isEmpty()) Prefs.customShape(ctx).glyph else {
                 val c = pattern.getPixel(pattern.width / 2, pattern.height / 2)
                 val lum = 0.299 * android.graphics.Color.red(c) + 0.587 * android.graphics.Color.green(c) + 0.114 * android.graphics.Color.blue(c)
                 if (android.graphics.Color.alpha(c) > 128 && lum > 150) 0xFF1C1C1C.toInt() else android.graphics.Color.WHITE
@@ -204,8 +208,11 @@ class Builder(private val ctx: Context) {
             }
         }
 
+        progress("Drawing quick toggles")
+        val toggles = runCatching { QuickToggles.entries(ctx, base).mapValues { png(it.value) } }.getOrDefault(emptyMap())
+
         progress("Writing icons")
-        val zip = rebuild(base, made)
+        val zip = rebuild(base, made, toggles)
         val stage = ThemeStore.stage(ctx)
         val mrc = File(stage, "$own.mrc").apply { writeBytes(zip) }
         val sha = ThemeStore.sha1(zip)
@@ -258,7 +265,7 @@ class Builder(private val ctx: Context) {
     private fun png(b: Bitmap) = ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
 
     /** Every original entry kept, ours added; stored, not deflated, like the theme's own. */
-    private fun rebuild(base: Base, made: Map<String, ByteArray>): ByteArray {
+    private fun rebuild(base: Base, made: Map<String, ByteArray>, extra: Map<String, ByteArray> = emptyMap()): ByteArray {
         val out = ByteArrayOutputStream()
         ZipOutputStream(out).use { zo ->
             fun put(name: String, data: ByteArray) {
@@ -268,9 +275,10 @@ class Builder(private val ctx: Context) {
                 }
                 zo.putNextEntry(e); zo.write(data); zo.closeEntry()
             }
-            val replaced = made.keys.map { base.dir + it + ".png" }.toSet()
+            val replaced = made.keys.map { base.dir + it + ".png" }.toSet() + extra.keys
             for ((name, data) in base.entries) if (name !in replaced) put(name, data)
             for ((pkg, data) in made) put(base.dir + pkg + ".png", data)
+            for ((name, data) in extra) put(name, data)
             put("sondericons.json", "{\"app\":\"SonderIcons\",\"icons\":${made.size}}".toByteArray())
         }
         return out.toByteArray()

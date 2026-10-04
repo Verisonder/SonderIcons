@@ -109,7 +109,8 @@ private fun Home(resumes: Int) {
     var previewing by remember { mutableStateOf<App?>(null) }
     var style by remember { mutableStateOf(Style.byId(ctx, Prefs.styleId(ctx))) }
     var styles by remember { mutableStateOf(Style.all(ctx)) }
-    var editingShape by remember { mutableStateOf(false) }
+    var styling by remember { mutableStateOf(false) }
+    var built by remember { mutableStateOf(false) }
     LaunchedEffect(resumes) { styles = withContext(Dispatchers.Default) { Style.all(ctx) } }
     var styleError by remember { mutableStateOf<String?>(null) }
     fun load(t: Builder.Target): Builder.Base? = t.theme?.let {
@@ -201,7 +202,8 @@ private fun Home(resumes: Int) {
                     scope.launch {
                         val r = withContext(Dispatchers.Default) { builder.build { busy = it } }
                         busy = null
-                        message = r.error ?: "${r.made} icons ready. Apply Theme backup in Themes."
+                        built = r.error == null
+                        message = r.error ?: "${r.made} icons ready."
                     }
                 },
                 onThemes = { ctx.packageManager.getLaunchIntentForPackage(ThemeStore.THEMES_PKG)?.let { ctx.startActivity(it) } },
@@ -220,7 +222,7 @@ private fun Home(resumes: Int) {
                     shizuku = shizuku, target = target, ready = base != null, onPick = { picking = true },
                     style = style, styles = styles, styleError = styleError,
                     onStyle = { st -> style = st; Prefs.setStyleId(ctx, st.id); reload++ },
-                    onEditShape = { editingShape = true }, query = query, filter = filter, counts = counts,
+                    onCustomize = { styling = true }, query = query, filter = filter, counts = counts,
                     onQuery = { query = it }, onFilter = { filter = it }, onSettings = { settings = true },
                     onAllow = { Shell.requestPermission() },
                     onOpenShizuku = { ctx.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")?.let { ctx.startActivity(it) } },
@@ -258,14 +260,9 @@ private fun Home(resumes: Int) {
             onDismiss = { previewing = null },
         )
     }
-    if (editingShape) ShapeEditor(
-        initial = Prefs.customShape(ctx),
-        onDismiss = { editingShape = false },
-        onSave = { sh ->
-            Prefs.setCustomShape(ctx, sh); editingShape = false
-            styles = Style.all(ctx); style = Style.byId(ctx, "custom"); Prefs.setStyleId(ctx, "custom"); reload++
-        },
-    )
+    if (styling) StyleScreen(styles, style) { st ->
+        styling = false; styles = Style.all(ctx); style = st; built = false; reload++
+    }
     if (picking) target?.let { t ->
         ThemePicker(t, onDismiss = { picking = false }, onPick = { id ->
             Prefs.setChosenThemeId(ctx, id); picking = false; reload++
@@ -288,7 +285,7 @@ private fun Home(resumes: Int) {
 @Composable
 private fun Header(
     shizuku: Boolean?, target: Builder.Target?, ready: Boolean, onPick: () -> Unit,
-    style: Style, styles: List<Style>, styleError: String?, onStyle: (Style) -> Unit, onEditShape: () -> Unit, query: String, filter: Filter, counts: Map<Filter, Int>,
+    style: Style, styles: List<Style>, styleError: String?, onStyle: (Style) -> Unit, onCustomize: () -> Unit, query: String, filter: Filter, counts: Map<Filter, Int>,
     onQuery: (String) -> Unit, onFilter: (Filter) -> Unit, onSettings: () -> Unit, onAllow: () -> Unit, onOpenShizuku: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(bottom = 6.dp)) {
@@ -305,10 +302,7 @@ private fun Header(
             target.theme == null -> Status("Your current theme isn't a Theme backup.", "Choose", onPick)
             else -> ThemeLine(target, onPick)
         }
-        if (target?.theme != null) {
-            StylePicker(style, styles, onStyle)
-            if (style.id == "custom") TextButton(onClick = onEditShape, contentPadding = PaddingValues(0.dp)) { Text("Edit shape") }
-        }
+        if (target?.theme != null) StyleCard(style, onCustomize)
         styleError?.let { Status(it, null, null) }
         TextField(
             value = query, onValueChange = onQuery, singleLine = true,
@@ -349,8 +343,37 @@ private fun Modifier.horizontalScrollable(): Modifier =
 private fun savedOn(ms: Long): String =
     if (ms <= 0) "" else java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(ms))
 
+/** The current look and the way into changing it. */
+@Composable
+private fun StyleCard(style: Style, onCustomize: () -> Unit) {
+    val ctx = LocalContext.current
+    val sample = remember(style.id) {
+        when (style.kind) {
+            StyleKind.DRAWN -> style.pattern(96).let { GlyphEngine.letter("A", style.pattern(180), 58, color = style.glyph) }
+            StyleKind.SET -> sampleIcon(ctx, style.asset!!)
+            StyleKind.PACK -> IconPack(ctx, style.pack!!, style.label).let { p -> p.covers("com.whatsapp", null)?.let { p.bitmap(it, 180) } }
+            StyleKind.THEME -> null
+        }
+    }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Palette.Circle).clickable(onClick = onCustomize).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            if (sample != null) Image(sample.asImageBitmap(), null, Modifier.fillMaxSize())
+            else Box(Modifier.fillMaxSize().clip(CircleShape).background(Palette.Line))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Style", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+            Text(style.label, style = MaterialTheme.typography.bodyMedium)
+        }
+        Text("Customize", style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 /** One designed icon from a bundled set, to show what the set looks like. */
-private fun sampleIcon(ctx: android.content.Context, asset: String): Bitmap? = runCatching {
+internal fun sampleIcon(ctx: android.content.Context, asset: String): Bitmap? = runCatching {
     java.util.zip.ZipInputStream(ctx.assets.open(asset)).use { z ->
         while (true) {
             val e = z.nextEntry ?: return@use null
@@ -363,43 +386,6 @@ private fun sampleIcon(ctx: android.content.Context, asset: String): Bitmap? = r
     }
 }.getOrNull()
 
-/** The look of every icon. A small swatch of each, since names alone don't show it. */
-@Composable
-private fun StylePicker(current: Style, styles: List<Style>, onPick: (Style) -> Unit) {
-    val ctx = LocalContext.current
-    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-        styles.forEach { st ->
-            val swatch = remember(st.id, st.shape) {
-                when (st.kind) {
-                    StyleKind.DRAWN -> st.pattern(96)
-                    StyleKind.SET -> sampleIcon(ctx, st.asset!!)
-                    StyleKind.PACK -> IconPack(ctx, st.pack!!, st.label).let { p ->
-                        p.covers("com.whatsapp", null)?.let { p.bitmap(it, 96) }
-                    } ?: runCatching {
-                        val d = ctx.packageManager.getApplicationIcon(st.pack!!)
-                        Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).also { b -> d.setBounds(0, 0, 96, 96); d.draw(android.graphics.Canvas(b)) }
-                    }.getOrNull()
-                    StyleKind.THEME -> null
-                }
-            }
-            val selected = st.id == current.id
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onPick(st) }) {
-                Box(
-                    Modifier.size(52.dp).clip(CircleShape)
-                        .border(2.dp, if (selected) Palette.White else Palette.Black, CircleShape).padding(4.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (swatch != null) Image(swatch.asImageBitmap(), null, Modifier.fillMaxSize())
-                    else Box(Modifier.fillMaxSize().clip(CircleShape).background(Palette.Circle), contentAlignment = Alignment.Center) {
-                        Text("Aa", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                Text(st.label, style = MaterialTheme.typography.labelSmall, color = if (selected) Palette.White else Palette.Muted)
-            }
-        }
-    }
-}
 
 /**
  * First run, and whenever something is missing: the steps in order, each with what to do
@@ -576,13 +562,22 @@ private fun IconCircle(r: Builder.Result?, pkg: String, builder: Builder, size: 
 }
 
 @Composable
-private fun BuildBar(enabled: Boolean, busy: String?, message: String?, onBuild: () -> Unit, onThemes: () -> Unit) {
+private fun BuildBar(enabled: Boolean, busy: String?, message: String?, built: Boolean, onBuild: () -> Unit, onThemes: () -> Unit) {
     Column(
         Modifier.fillMaxWidth().background(Palette.Black).navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         HorizontalDivider(color = Palette.Line, modifier = Modifier.padding(bottom = 2.dp))
         (busy ?: message)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = if (busy != null) Palette.Muted else Palette.White) }
+        // the one step only the person can do, said where they'll need it
+        if (built && busy == null) Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Palette.Circle).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("Now apply it in Themes", style = MaterialTheme.typography.bodyMedium)
+            Text("My account, Themes, then Theme backup, Apply. Choose Theme backup, not SonderIcons.",
+                style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
                 onClick = onBuild, enabled = enabled, modifier = Modifier.weight(1f).height(52.dp),
@@ -747,7 +742,7 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
 }
 
 @Composable
-private fun switchColors() = SwitchDefaults.colors(
+internal fun switchColors() = SwitchDefaults.colors(
     checkedThumbColor = Palette.Black, checkedTrackColor = Palette.White,
     uncheckedThumbColor = Palette.Muted, uncheckedTrackColor = Palette.Black, uncheckedBorderColor = Palette.Line,
 )
@@ -756,7 +751,7 @@ private val SWATCHES = listOf(0xFF1C1C1C, 0xFF000000, 0xFFF2F2F2, 0xFFFFFFFF, 0x
 
 /** Colour choice: common swatches, and a hex field for anything else. */
 @Composable
-private fun ColorRow(label: String, value: Int, onChange: (Int) -> Unit) {
+internal fun ColorRow(label: String, value: Int, onChange: (Int) -> Unit) {
     var hex by remember(value) { mutableStateOf("%06X".format(value and 0xFFFFFF)) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(label, style = MaterialTheme.typography.bodyMedium)
@@ -782,64 +777,6 @@ private fun ColorRow(label: String, value: Int, onChange: (Int) -> Unit) {
     }
 }
 
-/** Design the background for the Custom style, with a live sample of it. */
-@Composable
-private fun ShapeEditor(initial: Shape, onDismiss: () -> Unit, onSave: (Shape) -> Unit) {
-    var sh by remember { mutableStateOf(initial) }
-    val samples = remember(sh) {
-        val pat = sh.draw(180)
-        listOf("S", "I", "C").map { GlyphEngine.letter(it, pat, 58, color = sh.glyph) }
-    }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Palette.Circle) {
-        Column(
-            Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            Text("Custom shape", style = MaterialTheme.typography.titleMedium)
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Palette.Line).padding(vertical = 18.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) { samples.forEach { Image(it.asImageBitmap(), null, Modifier.size(64.dp)) } }
-
-            Text("Shape", style = MaterialTheme.typography.bodyMedium)
-            val forms = listOf("circle" to "Circle", "squircle" to "Squircle", "square" to "Square",
-                "teardrop" to "Teardrop", "hexagon" to "Hexagon", "none" to "None")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                forms.forEach { (f, label) ->
-                    FilterChip(
-                        selected = sh.form == f, onClick = {
-                            sh = sh.copy(form = f, corner = when (f) { "square" -> 0.12f; "squircle" -> 0.3f; "teardrop" -> 0.5f; else -> sh.corner })
-                        },
-                        label = { Text(label) }, shape = RoundedCornerShape(20.dp),
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Palette.White, selectedLabelColor = Palette.Black,
-                            containerColor = Palette.Circle, labelColor = Palette.White),
-                        border = FilterChipDefaults.filterChipBorder(enabled = true, selected = sh.form == f, borderColor = Palette.Line),
-                    )
-                }
-            }
-            if (sh.form in setOf("squircle", "square", "teardrop")) Column {
-                Text("Corners", style = MaterialTheme.typography.bodyMedium)
-                Slider(value = sh.corner, onValueChange = { sh = sh.copy(corner = it) }, valueRange = 0f..0.5f, colors = sliderColors())
-            }
-            if (sh.form != "none") ColorRow("Background", sh.background) { sh = sh.copy(background = it) }
-            ColorRow("Glyph", sh.glyph) { sh = sh.copy(glyph = it) }
-            if (sh.form != "none") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Outline", style = MaterialTheme.typography.bodyMedium)
-                        Text("A ring around the background.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
-                    }
-                    Switch(checked = sh.outline, onCheckedChange = { sh = sh.copy(outline = it) }, colors = switchColors())
-                }
-                if (sh.outline) ColorRow("Outline colour", sh.outlineColor) { sh = sh.copy(outlineColor = it) }
-            }
-            Button(
-                onClick = { onSave(sh) }, modifier = Modifier.fillMaxWidth().height(52.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Palette.White, contentColor = Palette.Black),
-            ) { Text("Use this shape") }
-        }
-    }
-}
 
 /** Any icon from an installed pack, with search, for one app. */
 @Composable
@@ -881,14 +818,14 @@ private fun PackIconPicker(pack: IconPack, packs: List<IconPack>, onSwitch: (Ico
 }
 
 @Composable
-private fun sliderColors() = SliderDefaults.colors(
+internal fun sliderColors() = SliderDefaults.colors(
     thumbColor = Palette.White, activeTrackColor = Palette.White, inactiveTrackColor = Palette.Line,
     activeTickColor = Palette.Black, inactiveTickColor = Palette.Muted,
 )
 
 /** A collapsed section: one line until it is opened. */
 @Composable
-private fun Advanced(subtitle: String, content: @Composable ColumnScope.() -> Unit) {
+internal fun Advanced(subtitle: String, content: @Composable ColumnScope.() -> Unit) {
     var open by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(
@@ -906,7 +843,7 @@ private fun Advanced(subtitle: String, content: @Composable ColumnScope.() -> Un
 }
 
 @Composable
-private fun <T> Segments(options: List<Pair<T, String>>, value: T, onPick: (T) -> Unit) {
+internal fun <T> Segments(options: List<Pair<T, String>>, value: T, onPick: (T) -> Unit) {
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
         options.forEachIndexed { i, (v, label) ->
             SegmentedButton(
@@ -925,7 +862,7 @@ private fun <T> Segments(options: List<Pair<T, String>>, value: T, onPick: (T) -
 
 /** How a glyph is made. The same controls set the defaults (Settings) and one app (its sheet). */
 @Composable
-private fun ColumnScope.TuningEditor(t: Prefs.Tuning, showSource: Boolean, onChange: (Prefs.Tuning) -> Unit) {
+internal fun ColumnScope.TuningEditor(t: Prefs.Tuning, showSource: Boolean, onChange: (Prefs.Tuning) -> Unit) {
     if (showSource) {
         Text("Source", style = MaterialTheme.typography.bodyMedium)
         Segments(listOf("auto" to "Auto", "glyph" to "Glyph", "shape" to "Shape", "cutout" to "Cut-out"), t.source) {
@@ -1022,32 +959,14 @@ private fun PreviewScreen(
 
 @Composable
 private fun SettingsSheet(ready: Boolean, onDismiss: () -> Unit, onScale: () -> Unit, onTuning: () -> Unit, onRestore: () -> Unit) {
-    val ctx = LocalContext.current
-    var size by remember { mutableFloatStateOf(Prefs.globalScale(ctx)) }
-    LaunchedEffect(size) { delay(250); if (size != Prefs.globalScale(ctx)) { Prefs.setGlobalScale(ctx, size); onScale() } }
-
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Palette.Circle) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("Settings", style = MaterialTheme.typography.titleMedium)
-            Column {
-                Row {
-                    Text("Glyph size for all apps", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    Text("${(size * 100).roundToInt()}%", style = MaterialTheme.typography.bodyMedium, color = Palette.Muted)
-                }
-                Slider(
-                    value = size, onValueChange = { size = (it * 20).roundToInt() / 20f }, valueRange = 0.8f..1.2f, steps = 7,
-                    colors = SliderDefaults.colors(thumbColor = Palette.White, activeTrackColor = Palette.White, inactiveTrackColor = Palette.Line,
-                        activeTickColor = Palette.Black, inactiveTickColor = Palette.Muted),
-                )
-                Text("100% matches the theme's own icons.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
-            }
-            HorizontalDivider(color = Palette.Line)
-            var tuning by remember { mutableStateOf(Prefs.globalTuning(ctx)) }
-            Advanced(subtitle = "How icons are drawn, for every app") {
-                TuningEditor(tuning, showSource = true) { tuning = it; Prefs.setGlobalTuning(ctx, it); onTuning() }
-                if (tuning != Prefs.Tuning()) TextButton(onClick = {
-                    tuning = Prefs.Tuning(); Prefs.setGlobalTuning(ctx, tuning); onTuning()
-                }, contentPadding = PaddingValues(0.dp)) { Text("Reset") }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("How it works", style = MaterialTheme.typography.bodyMedium)
+                Text("Build icons writes them into Theme backup. Applying Theme backup in Themes puts them on screen. " +
+                    "Themes lists them as SonderIcons too; that entry can't be applied on its own.",
+                    style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
             }
             HorizontalDivider(color = Palette.Line)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
