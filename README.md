@@ -1,25 +1,61 @@
 # SonderIcons
 
-Every app on a HyperOS phone in your theme's icon style. No root.
+Every app on a HyperOS phone in one look. No root.
 
 HyperOS themes ship hand-drawn icons for a fixed list of apps and trace an outline of
-everything else. SonderIcons draws the rest in the theme's own style, from each app's
-monochrome glyph where it has one, and lets you pick an image or keep the theme's icon
-for any app.
+everything else. SonderIcons draws the rest to match — from each app's own monochrome
+glyph where it has one — and lets you restyle the whole set.
+
+## Features
+
+- **Fill the gaps.** An icon for every app your look doesn't cover, drawn from the app's
+  monochrome glyph, its shape, or its logo cut out of its icon.
+- **Looks.** Dark Nothing (a designed set, built in), your applied theme, light and dark
+  circles and squircles, a shape of your own, or any installed icon pack (Icon Pack
+  Studio and other standard packs).
+- **Reshape anything.** Move any look's icons onto another shape and keep their designs.
+- **Per app.** Its own glyph, a gallery picture, an icon from any pack (suggested in one
+  tap), its first letter, or the look's icon — with size, stroke, background and a home
+  screen preview.
+- **Groups.** Select apps by filter or search and change them together.
+- **Quick toggles** in the look's colours or your own.
+- **Extras.** Second icons and alternative icons (apps like Ente switch between several),
+  pinned shortcuts, and how unknown icons are drawn.
+- **OLED, Dark and Light** app themes.
 
 ## How it works
 
-- Reads the applied theme's icons through [Shizuku](https://shizuku.rikka.app/).
-- Draws a glyph for every app the theme doesn't cover.
-- Writes a new icons file into the Themes app's library and points the
-  "Theme backup" theme at it. You apply it in Themes, as with any theme.
-- "Restore original icons" points it back.
+HyperOS only applies icons that come from a theme it trusts, and the one it always trusts
+is the **Theme backup** it makes itself. SonderIcons, through
+[Shizuku](https://shizuku.rikka.app/):
 
-## Needs
+1. reads your look's icons,
+2. draws an icon file with every app in it,
+3. points Theme backup at that file.
 
-- HyperOS with a "Theme backup" theme (made by Themes → Customize theme).
-- Shizuku running.
+You then apply **Theme backup** in Themes, as with any theme. The Icons list there also
+shows an entry called SonderIcons; that one can't be applied on its own.
+*Restore original icons* in Settings puts the theme's own icons back.
+
+## Requirements
+
+- A Xiaomi, Redmi or POCO phone on HyperOS.
+- [Shizuku](https://shizuku.rikka.app/), started with Wireless debugging.
+- A Theme backup: in Themes, open *Customize theme*, change any part and apply.
+
+## Install
+
+Download the APK from [Releases](../../releases).
+
+## Build
+
+```
+gradle assembleRelease
+```
+
+JDK 17. Pushing a `v*` tag builds and publishes a release; the tag must match
+`versionName` and have notes in `docs/releasenote/`.
 
 ## Licence
 
-GPL-3.0-only.
+GPL-3.0-only. See [LICENSE](LICENSE).
