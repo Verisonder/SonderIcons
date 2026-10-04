@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -97,6 +98,7 @@ private fun Home(resumes: Int) {
     var settings by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf<String?>(null) }
     val selected = remember { mutableStateListOf<String>() }
+    var previewing by remember { mutableStateOf<App?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
 
     fun refresh(pkg: String) = scope.launch {
@@ -210,7 +212,19 @@ private fun Home(resumes: Int) {
 
     val sheetApp = open
     if (sheetApp != null && base != null) {
-        AppSheet(sheetApp, results[sheetApp.pkg], builder, onDismiss = { open = null }, onChanged = { refresh(sheetApp.pkg) })
+        AppSheet(sheetApp, results[sheetApp.pkg], builder, onDismiss = { open = null }, onChanged = { refresh(sheetApp.pkg) },
+            onPreview = { previewing = sheetApp })
+    }
+    previewing?.let { a ->
+        // the app among its neighbours in name order, as it would sit on a home screen
+        val i = apps.indexOfFirst { it.pkg == a.pkg }.coerceAtLeast(0)
+        val from = (i - 5).coerceIn(0, maxOf(0, apps.size - 8))
+        val around = apps.subList(from, minOf(apps.size, from + 8))
+        PreviewScreen(
+            themeId = target?.theme?.id, focus = a.pkg,
+            icons = around.map { Triple(it.pkg, it.label, results[it.pkg]) }, builder = builder,
+            onDismiss = { previewing = null },
+        )
     }
     if (picking) target?.let { t ->
         ThemePicker(t, onDismiss = { picking = false }, onPick = { id ->
@@ -221,6 +235,7 @@ private fun Home(resumes: Int) {
         ready = shizuku == true && base != null,
         onDismiss = { settings = false },
         onScale = { refreshAll() },
+        onTuning = { refreshAll() },
         onRestore = {
             scope.launch {
                 message = withContext(Dispatchers.Default) { builder.restore() } ?: "Original icons linked. Apply Theme backup in Themes."
@@ -445,7 +460,7 @@ private fun SelectionBar(count: Int, onAll: () -> Unit, onClear: () -> Unit, onA
 
 /** Everything about one app: what it will look like, where that comes from, and how to change it. */
 @Composable
-private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: () -> Unit, onChanged: () -> Unit) {
+private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: () -> Unit, onChanged: () -> Unit, onPreview: () -> Unit) {
     val ctx = LocalContext.current
     var mode by remember { mutableStateOf(Prefs.mode(ctx, a.pkg)) }
     var size by remember { mutableFloatStateOf(Prefs.scale(ctx, a.pkg)) }
@@ -459,7 +474,7 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
     LaunchedEffect(size) { delay(150); if (size != Prefs.scale(ctx, a.pkg)) { Prefs.setScale(ctx, a.pkg, size); onChanged() } }
 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Palette.Circle) {
-        Column(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(112.dp).clip(CircleShape).background(Palette.Black), contentAlignment = Alignment.Center) {
                     IconCircle(r, a.pkg, builder, 104.dp)
@@ -513,22 +528,183 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
                 }
                 Slider(
                     value = size, onValueChange = { size = (it * 20).roundToInt() / 20f }, valueRange = 0.6f..1.4f, steps = 15,
-                    colors = SliderDefaults.colors(thumbColor = Palette.White, activeTrackColor = Palette.White, inactiveTrackColor = Palette.Line,
-                        activeTickColor = Palette.Black, inactiveTickColor = Palette.Muted),
+                    colors = sliderColors(),
                 )
+            }
+
+            OutlinedButton(
+                onClick = onPreview, enabled = r?.bitmap != null, modifier = Modifier.fillMaxWidth().height(48.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line),
+            ) { Text("Preview on home screen", color = Palette.White) }
+
+            if (mode != Prefs.Mode.THEME) {
+                var tuning by remember { mutableStateOf(Prefs.tuning(ctx, a.pkg)) }
+                var custom by remember { mutableStateOf(Prefs.hasTuning(ctx, a.pkg)) }
+                Advanced(subtitle = if (custom) "Changed for this app" else "Using the defaults") {
+                    TuningEditor(tuning, showSource = mode == Prefs.Mode.AUTO) {
+                        tuning = it; custom = true; Prefs.setTuning(ctx, a.pkg, it); onChanged()
+                    }
+                    if (custom) TextButton(onClick = {
+                        Prefs.clearTuning(ctx, a.pkg); custom = false; tuning = Prefs.tuning(ctx, a.pkg); onChanged()
+                    }, contentPadding = PaddingValues(0.dp)) { Text("Use the defaults") }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun SettingsSheet(ready: Boolean, onDismiss: () -> Unit, onScale: () -> Unit, onRestore: () -> Unit) {
+private fun sliderColors() = SliderDefaults.colors(
+    thumbColor = Palette.White, activeTrackColor = Palette.White, inactiveTrackColor = Palette.Line,
+    activeTickColor = Palette.Black, inactiveTickColor = Palette.Muted,
+)
+
+/** A collapsed section: one line until it is opened. */
+@Composable
+private fun Advanced(subtitle: String, content: @Composable ColumnScope.() -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 4.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Advanced", style = MaterialTheme.typography.bodyMedium)
+                Text(subtitle, style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+            }
+            Text(if (open) "Hide" else "Show", color = Palette.Muted, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (open) content()
+    }
+}
+
+@Composable
+private fun <T> Segments(options: List<Pair<T, String>>, value: T, onPick: (T) -> Unit) {
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        options.forEachIndexed { i, (v, label) ->
+            SegmentedButton(
+                selected = v == value, onClick = { onPick(v) },
+                shape = SegmentedButtonDefaults.itemShape(i, options.size),
+                colors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = Palette.White, activeContentColor = Palette.Black,
+                    inactiveContainerColor = Palette.Circle, inactiveContentColor = Palette.White,
+                    activeBorderColor = Palette.White, inactiveBorderColor = Palette.Line,
+                ),
+                icon = {},
+            ) { Text(label, maxLines = 1) }
+        }
+    }
+}
+
+/** How a glyph is made. The same controls set the defaults (Settings) and one app (its sheet). */
+@Composable
+private fun ColumnScope.TuningEditor(t: Prefs.Tuning, showSource: Boolean, onChange: (Prefs.Tuning) -> Unit) {
+    if (showSource) {
+        Text("Source", style = MaterialTheme.typography.bodyMedium)
+        Segments(listOf("auto" to "Auto", "glyph" to "Glyph", "shape" to "Shape", "cutout" to "Cut-out"), t.source) {
+            onChange(t.copy(source = it))
+        }
+        Text(
+            when (t.source) {
+                "glyph" -> "The app's own monochrome icon."
+                "shape" -> "The outline of the app's icon."
+                "cutout" -> "The logo separated from its background."
+                else -> "The best of the three."
+            },
+            style = MaterialTheme.typography.labelSmall, color = Palette.Muted,
+        )
+    }
+    Text("Stroke", style = MaterialTheme.typography.bodyMedium)
+    Segments(listOf<Pair<Int?, String>>(null to "Auto", -1 to "Thin", 0 to "Normal", 1 to "Bold"), t.stroke) {
+        onChange(t.copy(stroke = it))
+    }
+    var sens by remember(t.sensitivity) { mutableFloatStateOf(t.sensitivity) }
+    Column {
+        Row {
+            Text("Cut-out sensitivity", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text("${(sens * 100).roundToInt()}%", style = MaterialTheme.typography.bodyMedium, color = Palette.Muted)
+        }
+        Slider(
+            value = sens, onValueChange = { sens = (it * 10).roundToInt() / 10f },
+            onValueChangeFinished = { onChange(t.copy(sensitivity = sens)) },
+            valueRange = 0.5f..2f, steps = 14, colors = sliderColors(),
+        )
+        Text("Higher keeps fainter parts of the logo.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Crisp edges", style = MaterialTheme.typography.bodyMedium)
+            Text("Hard edges instead of smooth ones.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+        }
+        Switch(
+            checked = t.crisp, onCheckedChange = { onChange(t.copy(crisp = it)) },
+            colors = SwitchDefaults.colors(checkedThumbColor = Palette.Black, checkedTrackColor = Palette.White,
+                uncheckedThumbColor = Palette.Muted, uncheckedTrackColor = Palette.Black, uncheckedBorderColor = Palette.Line),
+        )
+    }
+}
+
+/**
+ * The app on a home screen: the theme's own launcher preview behind it, its neighbours by
+ * name around it, at the size icons really are. Judged in place, not on its own.
+ */
+@Composable
+private fun PreviewScreen(
+    themeId: String?, focus: String, icons: List<Triple<String, String, Builder.Result?>>,
+    builder: Builder, onDismiss: () -> Unit,
+) {
+    val backdrop by produceState<Bitmap?>(null, themeId) {
+        value = themeId?.let { id ->
+            withContext(Dispatchers.Default) {
+                ThemeStore.preview(id)?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
+            }
+        }
+    }
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Box(Modifier.fillMaxSize().background(Palette.Black).clickable(onClick = onDismiss)) {
+            backdrop?.let {
+                Image(it.asImageBitmap(), null, Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+            }
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4), userScrollEnabled = false,
+                verticalArrangement = Arrangement.spacedBy(22.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = 20.dp),
+                modifier = Modifier.align(Alignment.Center).fillMaxWidth(),
+            ) {
+                items(icons, key = { it.first }) { (pkg, label, r) ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        IconCircle(r, pkg, builder, 62.dp)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            label, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                shadow = androidx.compose.ui.graphics.Shadow(Palette.Black, blurRadius = 6f)),
+                            color = Palette.White,
+                        )
+                        if (pkg == focus) Box(Modifier.padding(top = 4.dp).size(5.dp).clip(CircleShape).background(Palette.White))
+                    }
+                }
+            }
+            Text(
+                "Tap anywhere to close", color = Palette.White, style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 24.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsSheet(ready: Boolean, onDismiss: () -> Unit, onScale: () -> Unit, onTuning: () -> Unit, onRestore: () -> Unit) {
     val ctx = LocalContext.current
     var size by remember { mutableFloatStateOf(Prefs.globalScale(ctx)) }
     LaunchedEffect(size) { delay(250); if (size != Prefs.globalScale(ctx)) { Prefs.setGlobalScale(ctx, size); onScale() } }
 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Palette.Circle) {
-        Column(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("Settings", style = MaterialTheme.typography.titleMedium)
             Column {
                 Row {
@@ -541,6 +717,14 @@ private fun SettingsSheet(ready: Boolean, onDismiss: () -> Unit, onScale: () -> 
                         activeTickColor = Palette.Black, inactiveTickColor = Palette.Muted),
                 )
                 Text("100% matches the theme's own icons.", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+            }
+            HorizontalDivider(color = Palette.Line)
+            var tuning by remember { mutableStateOf(Prefs.globalTuning(ctx)) }
+            Advanced(subtitle = "How icons are drawn, for every app") {
+                TuningEditor(tuning, showSource = true) { tuning = it; Prefs.setGlobalTuning(ctx, it); onTuning() }
+                if (tuning != Prefs.Tuning()) TextButton(onClick = {
+                    tuning = Prefs.Tuning(); Prefs.setGlobalTuning(ctx, tuning); onTuning()
+                }, contentPadding = PaddingValues(0.dp)) { Text("Reset") }
             }
             HorizontalDivider(color = Palette.Line)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

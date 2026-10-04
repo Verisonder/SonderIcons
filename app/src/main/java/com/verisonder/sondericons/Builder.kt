@@ -76,14 +76,15 @@ class Builder(private val ctx: Context) {
     /** What [pkg] will look like after a build, with a reason a person can read. */
     fun resultFor(pkg: String, base: Base): Result {
         val target = (base.target * Prefs.scale(ctx, pkg) * Prefs.globalScale(ctx)).toInt()
+        val t = Prefs.tuning(ctx, pkg)
         return when (Prefs.mode(ctx, pkg)) {
             Prefs.Mode.THEME -> Result(base.themeIcon(pkg), Kind.THEME,
                 if (pkg in base.themed) "Theme icon" else "Theme's traced outline")
-            Prefs.Mode.LETTER -> Result(GlyphEngine.letter(label(pkg), base.pattern, target), Kind.CUSTOM, "First letter of its name")
+            Prefs.Mode.LETTER -> Result(GlyphEngine.letter(label(pkg), base.pattern, target, t), Kind.CUSTOM, "First letter of its name")
             Prefs.Mode.CUSTOM -> {
                 val f = Prefs.customFile(ctx, pkg)
                 val b = if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
-                val out = b?.let { GlyphEngine.fromImage(it, base.pattern, target) }
+                val out = b?.let { GlyphEngine.fromImage(it, base.pattern, target, t) }
                 if (out != null) Result(out, Kind.CUSTOM, "Your image")
                 else Result(null, Kind.MISSING, "That image has no clear shape. Try one with a transparent background.")
             }
@@ -92,10 +93,10 @@ class Builder(private val ctx: Context) {
                 val la = ctx.getSystemService(LauncherApps::class.java)
                 val info = la.getActivityList(pkg, Process.myUserHandle()).firstOrNull()
                     ?: return Result(null, Kind.MISSING, "Not on the home screen")
-                val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(rawIcon(info.activityInfo) ?: info.getIcon(0)))
+                val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(rawIcon(info.activityInfo) ?: info.getIcon(0)), t)
                 if (mask == null) Result(null, Kind.MISSING, "No clear shape found. Pick an image for it.")
-                else Result(GlyphEngine.render(mask, base.pattern, target), Kind.DRAWN, when (src) {
-                    "mono" -> "From its monochrome icon"
+                else Result(GlyphEngine.render(mask, base.pattern, target, t), Kind.DRAWN, when (src) {
+                    "mono", "mono-color" -> "From its monochrome icon"
                     "fg" -> "From its icon's shape"
                     else -> "Cut out of its icon"
                 })

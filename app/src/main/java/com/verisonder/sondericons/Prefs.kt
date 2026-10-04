@@ -22,6 +22,38 @@ object Prefs {
     fun globalScale(ctx: Context): Float = sp(ctx).getFloat("globalScale", 1f)
     fun setGlobalScale(ctx: Context, v: Float) = sp(ctx).edit().putFloat("globalScale", v).apply()
 
+    /**
+     * How a glyph is made. Global defaults, and per-app overrides where a field is set.
+     * source: auto | glyph | shape | cutout.  stroke: null = auto, else -1..2 px.
+     * sensitivity: how readily colour separation counts a pixel as logo (1 = default).
+     */
+    data class Tuning(val source: String = "auto", val stroke: Int? = null, val sensitivity: Float = 1f, val crisp: Boolean = false)
+
+    fun globalTuning(ctx: Context) = sp(ctx).let {
+        Tuning(it.getString("t:source", "auto")!!, it.getInt("t:stroke", Int.MIN_VALUE).takeIf { v -> v != Int.MIN_VALUE },
+            it.getFloat("t:sens", 1f), it.getBoolean("t:crisp", false))
+    }
+    fun setGlobalTuning(ctx: Context, t: Tuning) = sp(ctx).edit()
+        .putString("t:source", t.source).putInt("t:stroke", t.stroke ?: Int.MIN_VALUE)
+        .putFloat("t:sens", t.sensitivity).putBoolean("t:crisp", t.crisp).apply()
+
+    /** The per-app tuning, falling back to the global value for every field not overridden. */
+    fun tuning(ctx: Context, pkg: String): Tuning {
+        val g = globalTuning(ctx); val p = sp(ctx)
+        return Tuning(
+            p.getString("t:source:$pkg", null) ?: g.source,
+            if (p.contains("t:stroke:$pkg")) p.getInt("t:stroke:$pkg", 0).takeIf { it != Int.MIN_VALUE } else g.stroke,
+            if (p.contains("t:sens:$pkg")) p.getFloat("t:sens:$pkg", 1f) else g.sensitivity,
+            if (p.contains("t:crisp:$pkg")) p.getBoolean("t:crisp:$pkg", false) else g.crisp,
+        )
+    }
+    fun setTuning(ctx: Context, pkg: String, t: Tuning) = sp(ctx).edit()
+        .putString("t:source:$pkg", t.source).putInt("t:stroke:$pkg", t.stroke ?: Int.MIN_VALUE)
+        .putFloat("t:sens:$pkg", t.sensitivity).putBoolean("t:crisp:$pkg", t.crisp).apply()
+    fun hasTuning(ctx: Context, pkg: String) = sp(ctx).contains("t:source:$pkg")
+    fun clearTuning(ctx: Context, pkg: String) = sp(ctx).edit()
+        .remove("t:source:$pkg").remove("t:stroke:$pkg").remove("t:sens:$pkg").remove("t:crisp:$pkg").apply()
+
     fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "$pkg.png")
 
     /** This app's own icons resource id. Made once, then kept, so rebuilds replace in place. */

@@ -55,7 +55,9 @@ object GlyphEngine {
         return FloatArray(px.size) { min(1f, (px[it] ushr 24) / 255f / 0.6f) }
     }
 
-    fun colorMask(b: Bitmap): FloatArray? {
+    fun colorMask(b: Bitmap): FloatArray? = colorMask(b, 1f)
+
+    fun colorMask(b: Bitmap, sensitivity: Float): FloatArray? {
         val px = pixels(b)
         val region = BooleanArray(px.size) { (px[it] ushr 24) > 127 }
         if (region.count { it } < 500) return null
@@ -79,7 +81,7 @@ object GlyphEngine {
             if (!inner[i]) 0f else {
                 val c = rgb(px[i])
                 val d = bg.minOf { dist(c, it) }
-                ((d - 28f) / 40f).coerceIn(0f, 1f)
+                ((d - 28f / sensitivity) / 40f).coerceIn(0f, 1f)
             }
         }
     }
@@ -116,21 +118,30 @@ object GlyphEngine {
     }
 
     /** Returns the winning mask and its source name, or null with every reason it failed. */
-    fun pick(l: Layers): Pair<FloatArray?, String> {
-        val tries = listOf<Triple<String, Bitmap?, (Bitmap) -> FloatArray?>>(
+    fun pick(l: Layers, t: Prefs.Tuning = Prefs.Tuning()): Pair<FloatArray?, String> {
+        val cut: (Bitmap) -> FloatArray? = { colorMask(it, t.sensitivity) }
+        val all = listOf<Triple<String, Bitmap?, (Bitmap) -> FloatArray?>>(
             Triple("mono", l.mono, ::alphaMask),
-            Triple("mono-color", l.mono, ::colorMask),
+            Triple("mono-color", l.mono, cut),
             Triple("fg", l.fg, ::alphaMask),
-            Triple("fg-color", l.fg, ::colorMask),
-            Triple("icon-color", l.full, ::colorMask),
-            Triple("legacy-color", l.legacy, ::colorMask),
+            Triple("fg-color", l.fg, cut),
+            Triple("icon-color", l.full, cut),
+            Triple("legacy-color", l.legacy, cut),
             Triple("legacy", l.legacy, ::alphaMask),
         )
+        val tries = when (t.source) {
+            "glyph" -> all.filter { it.first.startsWith("mono") }
+            "shape" -> all.filter { it.first == "fg" || it.first == "legacy" }
+            "cutout" -> all.filter { it.first.endsWith("-color") }
+            else -> all
+        }
+        // a forced source is the person's call: only an empty result is refused
+        val forced = t.source != "auto"
         val why = mutableListOf<String>()
         for ((name, bmp, fn) in tries) {
             if (bmp == null) continue
             val m = runCatching { fn(bmp) }.getOrNull()
-            val bad = judge(m, trusted = name == "mono")
+            val bad = judge(m, trusted = name == "mono" || forced)
             if (bad == null) return m to name
             why += "$name: $bad"
         }
@@ -143,7 +154,7 @@ object GlyphEngine {
      * Draws [m] white, centred on [pattern], sized to [target] px across (the theme's own
      * glyph size). Specks outside the main shape are ignored when sizing.
      */
-    fun render(m: FloatArray, pattern: Bitmap, target: Int): Bitmap {
+    fun render(m: FloatArray, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning()): Bitmap {
         val xs = ArrayList<Int>(); val ys = ArrayList<Int>()
         for (i in m.indices) if (m[i] > 0.16f) { xs += i % N; ys += i / N }
         xs.sort(); ys.sort()
@@ -162,18 +173,25 @@ object GlyphEngine {
 
         // thin strokes vanish next to the theme's glyphs; thicken them, unless it is a
         // dotted design, which thickening would melt together
-        val gp = pixels(g)
-        val solid = BooleanArray(gp.size) { (gp[it] ushr 24) > 127 }
-        if (solid.count { it }.toFloat() / gp.size < 0.2f && components(solid, g.width, g.height).first <= 6) {
-            g = dilate(g)
+        when (val st = t.stroke) {
+            null -> {
+                val gp = pixels(g)
+                val solid = BooleanArray(gp.size) { (gp[it] ushr 24) > 127 }
+                if (solid.count { it }.toFloat() / gp.size < 0.2f && components(solid, g.width, g.height).first <= 6) g = dilate(g)
+            }
+            else -> {
+                repeat(maxOf(0, st)) { g = dilate(g) }
+                repeat(maxOf(0, -st)) { g = thin(g) }
+            }
         }
+        if (t.crisp) g = crisp(g)
         val result = pattern.copy(Bitmap.Config.ARGB_8888, true)
         Canvas(result).drawBitmap(g, ((result.width - g.width) / 2f), ((result.height - g.height) / 2f), Paint(Paint.FILTER_BITMAP_FLAG))
         return result
     }
 
     /** The first letter of the app's name, for icons with no usable shape (photos, game art). */
-    fun letter(label: String, pattern: Bitmap, target: Int): Bitmap {
+    fun letter(label: String, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning()): Bitmap {
         val ch = label.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "?"
         val b = Bitmap.createBitmap(N, N, Bitmap.Config.ARGB_8888)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -183,16 +201,16 @@ object GlyphEngine {
         val y = N / 2f - (p.descent() + p.ascent()) / 2f
         Canvas(b).drawText(ch, N / 2f, y, p)
         // letters read heavier than glyphs at the same size, so they sit a little smaller
-        return render(alphaMask(b), pattern, (target * 0.9f).toInt())
+        return render(alphaMask(b), pattern, (target * 0.9f).toInt(), t)
     }
 
     /** A picture the person chose: its shape if it has transparency, else its logo by colour. */
-    fun fromImage(b: Bitmap, pattern: Bitmap, target: Int): Bitmap? {
+    fun fromImage(b: Bitmap, pattern: Bitmap, target: Int, t: Prefs.Tuning = Prefs.Tuning()): Bitmap? {
         val big = Bitmap.createScaledBitmap(b.copy(Bitmap.Config.ARGB_8888, false), N, N, true)
         val a = alphaMask(big)
-        val m = if (judge(a, trusted = true) == null) a else colorMask(big)
+        val m = if (judge(a, trusted = true) == null) a else colorMask(big, t.sensitivity)
         if (judge(m, trusted = true) != null) return null
-        return render(m!!, pattern, target)
+        return render(m!!, pattern, target, t)
     }
 
     // ---------------- helpers ----------------
@@ -246,6 +264,26 @@ object GlyphEngine {
             out[y * N + x] = ok
         }
         return out
+    }
+
+    private fun thin(b: Bitmap): Bitmap {
+        val w = b.width; val h = b.height; val p = pixels(b)
+        val o = IntArray(p.size) { i ->
+            val x = i % w; val y = i / w; var a = 255
+            for (dy in -1..1) for (dx in -1..1) {
+                val nx = x + dx; val ny = y + dy
+                a = if (nx in 0 until w && ny in 0 until h) min(a, p[ny * w + nx] ushr 24) else 0
+            }
+            // keep half of the original edge so strokes thin without breaking apart
+            Color.argb((a + (p[i] ushr 24)) / 2, 255, 255, 255)
+        }
+        return Bitmap.createBitmap(o, w, h, Bitmap.Config.ARGB_8888)
+    }
+
+    private fun crisp(b: Bitmap): Bitmap {
+        val p = pixels(b)
+        val o = IntArray(p.size) { if ((p[it] ushr 24) > 127) Color.WHITE else Color.TRANSPARENT }
+        return Bitmap.createBitmap(o, b.width, b.height, Bitmap.Config.ARGB_8888)
     }
 
     private fun dilate(b: Bitmap): Bitmap {
