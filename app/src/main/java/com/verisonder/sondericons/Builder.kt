@@ -170,6 +170,7 @@ class Builder(private val ctx: Context) {
         progress("Linking Theme backup")
         if (theme.iconsId != own && !ThemeStore.link(ctx, theme, own))
             return Report(0, needs, "Could not link Theme backup")
+        ThemeStore.removeStale(own)
         ThemeStore.restartThemes()
         return Report(made.size, needs)
     }

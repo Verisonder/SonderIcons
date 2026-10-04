@@ -109,6 +109,21 @@ object ThemeStore {
             .map { it.substringAfterLast('/').removeSuffix(".mrm") }
             .firstOrNull { !isOurs(it) }
 
+    /**
+     * Removes icons files that earlier tools wrote and no theme points at any more, so the
+     * Themes app's Icons list holds one SonderIcons entry instead of a trail of old builds.
+     * Only files with one of our titles are touched, and never the one [keep].
+     */
+    fun removeStale(keep: String) {
+        val inUse = Shell.run("cat $DATA/meta/theme/*.mrm 2>/dev/null").text
+        Shell.run("ls $DATA/meta/icons/ 2>/dev/null").text.lines().map { it.trim() }
+            .filter { it.endsWith(".mrm") }.map { it.removeSuffix(".mrm") }
+            .filter { it != keep && !inUse.contains(it) && isOurs(it) }
+            .forEach { id ->
+                Shell.run("rm -f ${Shell.q("$DATA/meta/icons/$id.mrm")} ${Shell.q("$DATA/content/icons/$id.mrc")}")
+            }
+    }
+
     /** Points [theme]'s icons at [iconsId]. Returns false if the write did not land. */
     fun link(ctx: Context, theme: Theme, iconsId: String): Boolean {
         val json = JSONObject(theme.json.toString())
