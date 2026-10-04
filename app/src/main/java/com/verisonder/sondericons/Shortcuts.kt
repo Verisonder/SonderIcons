@@ -30,6 +30,7 @@ object Shortcuts {
         val hasConfig = base.entries.keys.any { it.endsWith("transform_config.xml") }
         when {
             s.fallback == "solid" -> out["transform_config.xml"] = solidConfig(base.glyph).toByteArray()
+            s.fallback == "none" -> out["transform_config.xml"] = plainConfig().toByteArray()
             !hasConfig -> out["transform_config.xml"] = tracedConfig(base.glyph).toByteArray()   // drawn looks had none
         }
         return out
@@ -94,6 +95,23 @@ object Shortcuts {
             <Param name="WhiteColor" value="#00000000"/>
         </Filter>
     </IconFilters>
+</IconTransform>
+"""
+
+    /**
+     * No filter: unknown pictures are shown as they are. Every app already has an icon from
+     * SonderIcons, so this only reaches shortcuts, and it lets themed shortcut copies keep
+     * the icon they were drawn with instead of being traced again.
+     */
+    fun plainConfig() = """<?xml version="1.0" encoding="UTF-8"?>
+<IconTransform>
+    <PointsMapping>
+        <Point fromX="0.0" fromY="0.0" toX="0.0" toY="0.0"/>
+        <Point fromX="0.0" fromY="90.0" toX="0.0" toY="90.0"/>
+        <Point fromX="90.0" fromY="90.0" toX="90.0" toY="90.0"/>
+        <Point fromX="90.0" fromY="0.0" toX="90.0" toY="0.0"/>
+    </PointsMapping>
+    <IconFilters/>
 </IconTransform>
 """
 
