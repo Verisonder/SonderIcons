@@ -79,6 +79,7 @@ class Builder(private val ctx: Context) {
         return when (Prefs.mode(ctx, pkg)) {
             Prefs.Mode.THEME -> Result(base.themeIcon(pkg), Kind.THEME,
                 if (pkg in base.themed) "Theme icon" else "Theme's traced outline")
+            Prefs.Mode.LETTER -> Result(GlyphEngine.letter(label(pkg), base.pattern, target), Kind.CUSTOM, "First letter of its name")
             Prefs.Mode.CUSTOM -> {
                 val f = Prefs.customFile(ctx, pkg)
                 val b = if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
@@ -101,6 +102,11 @@ class Builder(private val ctx: Context) {
             }
         }
     }
+
+    fun label(pkg: String): String = runCatching {
+        val pm = ctx.packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
 
     /** The app's own icon, for the sheet. */
     fun appIcon(pkg: String): Bitmap? = runCatching {

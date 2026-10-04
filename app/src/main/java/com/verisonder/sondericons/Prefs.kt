@@ -6,7 +6,7 @@ import java.util.UUID
 
 /** What the person chose for each app, and the ids this app needs to remember. */
 object Prefs {
-    enum class Mode { AUTO, CUSTOM, THEME }
+    enum class Mode { AUTO, CUSTOM, LETTER, THEME }
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences("sondericons", Context.MODE_PRIVATE)
 

@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 package com.verisonder.sondericons.ui
 
@@ -14,6 +14,8 @@ import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
@@ -94,6 +96,7 @@ private fun Home(resumes: Int) {
     var open by remember { mutableStateOf<App?>(null) }
     var settings by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf<String?>(null) }
+    val selected = remember { mutableStateListOf<String>() }
     var message by remember { mutableStateOf<String?>(null) }
 
     fun refresh(pkg: String) = scope.launch {
@@ -145,7 +148,21 @@ private fun Home(resumes: Int) {
     Scaffold(
         containerColor = Palette.Black,
         bottomBar = {
-            BuildBar(
+            if (selected.isNotEmpty()) SelectionBar(
+                count = selected.size,
+                onAll = { shown.forEach { if (it.pkg !in selected) selected += it.pkg } },
+                onClear = { selected.clear() },
+                onApply = { mode ->
+                    val pkgs = selected.toList(); selected.clear()
+                    pkgs.forEach { Prefs.setMode(ctx, it, mode) }
+                    scope.launch {
+                        val b = base ?: return@launch
+                        withContext(Dispatchers.Default) {
+                            for (p in pkgs) runCatching { builder.resultFor(p, b) }.getOrNull()?.let { results[p] = it }
+                        }
+                    }
+                },
+            ) else BuildBar(
                 enabled = shizuku == true && base != null && busy == null,
                 busy = busy, message = message,
                 onBuild = {
@@ -176,7 +193,11 @@ private fun Home(resumes: Int) {
                 )
             }
             items(shown, key = { it.pkg }) { a ->
-                Tile(a, results[a.pkg], builder, onClick = { open = a })
+                Tile(
+                    a, results[a.pkg], builder, selected = a.pkg in selected,
+                    onClick = { if (selected.isEmpty()) open = a else if (a.pkg in selected) selected -= a.pkg else selected += a.pkg },
+                    onLongClick = { if (a.pkg in selected) selected -= a.pkg else selected += a.pkg },
+                )
             }
             if (base != null && shown.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
                 Text(
@@ -332,10 +353,14 @@ private fun Status(text: String, action: String?, onAction: (() -> Unit)?) {
 
 /** An app as it will look: the theme's icon, a drawn one, or the app's own icon dimmed. */
 @Composable
-private fun Tile(a: App, r: Builder.Result?, builder: Builder, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onClick)) {
+private fun Tile(a: App, r: Builder.Result?, builder: Builder, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         Box(contentAlignment = Alignment.TopEnd) {
-            IconCircle(r, a.pkg, builder, 62.dp)
+            Box(
+                Modifier.size(70.dp).clip(CircleShape)
+                    .border(2.dp, if (selected) Palette.White else Palette.Black, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { IconCircle(r, a.pkg, builder, 62.dp) }
             when (r?.kind) {
                 Kind.MISSING -> Dot(Palette.Red)
                 Kind.CUSTOM -> Dot(Palette.White)
@@ -394,6 +419,30 @@ private fun BuildBar(enabled: Boolean, busy: String?, message: String?, onBuild:
     }
 }
 
+/** Replaces the build bar while apps are selected: one choice applied to all of them. */
+@Composable
+private fun SelectionBar(count: Int, onAll: () -> Unit, onClear: () -> Unit, onApply: (Prefs.Mode) -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().background(Palette.Black).navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        HorizontalDivider(color = Palette.Line, modifier = Modifier.padding(bottom = 2.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("$count selected", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            TextButton(onClick = onAll) { Text("Select all") }
+            TextButton(onClick = onClear) { Text("Cancel", color = Palette.Muted) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(Prefs.Mode.AUTO to "Auto", Prefs.Mode.LETTER to "Letter", Prefs.Mode.THEME to "Theme").forEach { (m, label) ->
+                OutlinedButton(
+                    onClick = { onApply(m) }, modifier = Modifier.weight(1f).height(48.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Palette.Line),
+                ) { Text(label, color = Palette.White) }
+            }
+        }
+    }
+}
+
 /** Everything about one app: what it will look like, where that comes from, and how to change it. */
 @Composable
 private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: () -> Unit, onChanged: () -> Unit) {
@@ -423,7 +472,7 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
                 }
             }
 
-            val options = listOf(Prefs.Mode.AUTO to "Auto", Prefs.Mode.CUSTOM to "Image", Prefs.Mode.THEME to "Theme")
+            val options = listOf(Prefs.Mode.AUTO to "Auto", Prefs.Mode.CUSTOM to "Image", Prefs.Mode.LETTER to "Letter", Prefs.Mode.THEME to "Theme")
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 options.forEachIndexed { i, (m, label) ->
                     SegmentedButton(
@@ -447,6 +496,7 @@ private fun AppSheet(a: App, r: Builder.Result?, builder: Builder, onDismiss: ()
                 when (mode) {
                     Prefs.Mode.AUTO -> "Drawn from the app's own icon."
                     Prefs.Mode.CUSTOM -> "Drawn from an image you choose."
+                    Prefs.Mode.LETTER -> "The first letter of its name."
                     Prefs.Mode.THEME -> "Left to the theme."
                 },
                 style = MaterialTheme.typography.bodyMedium, color = Palette.Muted,

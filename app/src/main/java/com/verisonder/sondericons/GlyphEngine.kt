@@ -172,6 +172,20 @@ object GlyphEngine {
         return result
     }
 
+    /** The first letter of the app's name, for icons with no usable shape (photos, game art). */
+    fun letter(label: String, pattern: Bitmap, target: Int): Bitmap {
+        val ch = label.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "?"
+        val b = Bitmap.createBitmap(N, N, Bitmap.Config.ARGB_8888)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE; textSize = N * 0.7f; textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, 600, false)
+        }
+        val y = N / 2f - (p.descent() + p.ascent()) / 2f
+        Canvas(b).drawText(ch, N / 2f, y, p)
+        // letters read heavier than glyphs at the same size, so they sit a little smaller
+        return render(alphaMask(b), pattern, (target * 0.9f).toInt())
+    }
+
     /** A picture the person chose: its shape if it has transparency, else its logo by colour. */
     fun fromImage(b: Bitmap, pattern: Bitmap, target: Int): Bitmap? {
         val big = Bitmap.createScaledBitmap(b.copy(Bitmap.Config.ARGB_8888, false), N, N, true)
