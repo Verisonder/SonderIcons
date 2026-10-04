@@ -94,7 +94,15 @@ object Prefs {
     fun appTheme(ctx: Context): String = sp(ctx).getString("appTheme", "oled")!!
     fun setAppTheme(ctx: Context, v: String) = sp(ctx).edit().putString("appTheme", v).apply()
 
-    fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "$pkg.png")
+    fun customFile(ctx: Context, pkg: String) = File(File(ctx.filesDir, "custom").apply { mkdirs() }, "${pkg.replace('/', '#')}.png")
+
+    /** Pinned shortcuts and icons the look doesn't know. All off by default. */
+    data class ShortcutStyle(val background: String = "style", val hideArrow: Boolean = false, val fallback: String = "traced")
+    fun shortcutStyle(ctx: Context) = sp(ctx).let {
+        ShortcutStyle(it.getString("sc:bg", "style")!!, it.getBoolean("sc:noArrow", false), it.getString("sc:fallback", "traced")!!)
+    }
+    fun setShortcutStyle(ctx: Context, v: ShortcutStyle) = sp(ctx).edit().putString("sc:bg", v.background)
+        .putBoolean("sc:noArrow", v.hideArrow).putString("sc:fallback", v.fallback).apply()
 
     /** This app's own icons resource id. Made once, then kept, so rebuilds replace in place. */
     fun ownIconsId(ctx: Context): String = sp(ctx).getString("ownIconsId", null)

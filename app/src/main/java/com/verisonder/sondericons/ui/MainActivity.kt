@@ -84,7 +84,7 @@ private class App(val pkg: String, val label: String)
 
 private const val SHIZUKU = "moe.shizuku.privileged.api"
 
-private enum class Filter(val title: String) { ALL("All"), DRAWN("Drawn"), YOURS("Yours"), THEME("Designed"), MISSING("Missing") }
+private enum class Filter(val title: String) { ALL("All"), DRAWN("Drawn"), YOURS("Yours"), THEME("Designed"), MISSING("Missing"), EXTRAS("Extras") }
 
 private fun Filter.matches(k: Kind?) = when (this) {
     Filter.ALL -> true
@@ -92,6 +92,7 @@ private fun Filter.matches(k: Kind?) = when (this) {
     Filter.YOURS -> k == Kind.CUSTOM
     Filter.THEME -> k == Kind.THEME
     Filter.MISSING -> k == Kind.MISSING
+    Filter.EXTRAS -> false   // its own list, see [extras]
 }
 
 @Composable
@@ -107,6 +108,7 @@ private fun Home(resumes: Int) {
     var picking by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
     var apps by remember { mutableStateOf<List<App>>(emptyList()) }
+    var extras by remember { mutableStateOf<List<App>>(emptyList()) }   // second icons and aliases
     val results = remember { mutableStateMapOf<String, Builder.Result>() }
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(Filter.ALL) }
@@ -133,7 +135,7 @@ private fun Home(resumes: Int) {
     fun refreshAll() = scope.launch {
         val b = base ?: return@launch
         withContext(Dispatchers.Default) {
-            for (a in apps) runCatching { builder.resultFor(a.pkg, b) }.getOrNull()?.let { results[a.pkg] = it }
+            for (a in apps + extras) runCatching { builder.resultFor(a.pkg, b) }.getOrNull()?.let { results[a.pkg] = it }
         }
     }
 
@@ -141,9 +143,11 @@ private fun Home(resumes: Int) {
         shizuku = when { Shell.available() -> true; Shell.running() -> false; else -> null }
         withContext(Dispatchers.Default) {
             val pm = ctx.packageManager
-            apps = builder.launchablePackages().map { p ->
-                App(p, runCatching { pm.getApplicationLabel(pm.getApplicationInfo(p, 0)).toString() }.getOrDefault(p))
+            val all = builder.entries()
+            apps = all.filter { it.primary }.map { e ->
+                App(e.pkg, runCatching { pm.getApplicationLabel(pm.getApplicationInfo(e.pkg, 0)).toString() }.getOrDefault(e.label))
             }.sortedBy { it.label.lowercase() }
+            extras = all.filter { !it.primary }.map { App(it.key, it.label) }
             if (shizuku == true) {
                 val t = builder.target()
                 // reread the theme only when the target changed; a resume alone shouldn't redraw everything
@@ -163,10 +167,12 @@ private fun Home(resumes: Int) {
         refreshAll()   // cached icons come back at once; old ones stay on screen meanwhile
     }
 
-    val counts = remember(results.toMap()) { Filter.entries.associateWith { f -> apps.count { f.matches(results[it.pkg]?.kind) } } }
-    val shown = apps.filter { a ->
+    val counts = remember(results.toMap(), extras) {
+        Filter.entries.associateWith { f -> if (f == Filter.EXTRAS) extras.size else apps.count { f.matches(results[it.pkg]?.kind) } }
+    }
+    val shown = (if (filter == Filter.EXTRAS) extras else apps).filter { a ->
         (query.isBlank() || a.label.contains(query, true) || a.pkg.contains(query, true)) &&
-            (filter == Filter.ALL || filter.matches(results[a.pkg]?.kind))
+            (filter == Filter.ALL || filter == Filter.EXTRAS || filter.matches(results[a.pkg]?.kind))
     }
 
     val hasShizuku = remember(resumes) { ctx.packageManager.getLaunchIntentForPackage(SHIZUKU) != null }
@@ -233,6 +239,9 @@ private fun Home(resumes: Int) {
                     onOpenShizuku = { ctx.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")?.let { ctx.startActivity(it) } },
                 )
             }
+            if (filter == Filter.EXTRAS) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
+                ShortcutsCard(base, onChanged = { built = false; message = null })
+            }
             items(shown, key = { it.pkg }) { a ->
                 Tile(
                     a, results[a.pkg], builder, selected = a.pkg in selected,
@@ -242,7 +251,11 @@ private fun Home(resumes: Int) {
             }
             if (base != null && shown.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
                 Text(
-                    if (filter == Filter.MISSING) "Every app has an icon." else "No apps match.",
+                    when (filter) {
+                        Filter.MISSING -> "Every app has an icon."
+                        Filter.EXTRAS -> "No app has a second icon."
+                        else -> "No apps match."
+                    },
                     color = Palette.Muted, modifier = Modifier.padding(top = 24.dp),
                 )
             }
@@ -326,7 +339,7 @@ private fun Header(
         if (ready) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScrollable()) {
             Filter.entries.forEach { f ->
                 val n = counts[f] ?: 0
-                if (f != Filter.ALL && n == 0) return@forEach
+                if (f != Filter.ALL && f != Filter.EXTRAS && n == 0) return@forEach
                 FilterChip(
                     selected = filter == f, onClick = { onFilter(f) },
                     label = { Text("${f.title}  $n", color = if (f == Filter.MISSING && filter != f) Palette.Red else Color.Unspecified) },
@@ -348,6 +361,55 @@ private fun Modifier.horizontalScrollable(): Modifier =
 
 private fun savedOn(ms: Long): String =
     if (ms <= 0) "" else java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(ms))
+
+/**
+ * Pinned shortcuts and unknown icons. A shortcut's picture comes from its app at run time,
+ * so what can be set is what it sits on, its arrow badge, and the filter for unknown icons.
+ */
+@Composable
+private fun ShortcutsCard(base: Builder.Base?, onChanged: () -> Unit) {
+    val ctx = LocalContext.current
+    var sc by remember { mutableStateOf(Prefs.shortcutStyle(ctx)) }
+    fun set(v: Prefs.ShortcutStyle) { sc = v; Prefs.setShortcutStyle(ctx, v); onChanged() }
+    val sample = remember(base, sc) {
+        base?.let { b ->
+            val size = 180
+            val out = if (sc.background == "none") Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                      else b.pattern.copy(Bitmap.Config.ARGB_8888, true)
+            val glyph = GlyphEngine.letter("S", Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888), b.target, color = b.glyph)
+            val c = android.graphics.Canvas(out)
+            c.drawBitmap(glyph, 0f, 0f, null)
+            if (!sc.hideArrow) c.drawBitmap(com.verisonder.sondericons.Shortcuts.arrow(b, size / 3), size * 2f / 3, size * 2f / 3, null)
+            out
+        }
+    }
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Palette.Circle).padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Shortcuts and unknown icons", style = MaterialTheme.typography.bodyMedium)
+                Text("Shortcuts an app pins to your home screen, and apps the look knows nothing about.",
+                    style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
+            }
+            sample?.let { Image(it.asImageBitmap(), null, Modifier.size(56.dp)) }
+        }
+        Text("Shortcuts sit on", style = MaterialTheme.typography.bodyMedium)
+        Segments(listOf("style" to "The style's shape", "none" to "Nothing"), sc.background) { set(sc.copy(background = it)) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Hide the shortcut arrow", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Switch(checked = sc.hideArrow, onCheckedChange = { set(sc.copy(hideArrow = it)) }, colors = switchColors())
+        }
+        Text("Unknown icons become", style = MaterialTheme.typography.bodyMedium)
+        Segments(listOf("traced" to "An outline", "solid" to "A silhouette"), sc.fallback) { set(sc.copy(fallback = it)) }
+        Text(
+            if (sc.fallback == "solid") "New: check a few unknown apps after applying."
+            else "HyperOS's own traced look.",
+            style = MaterialTheme.typography.labelSmall, color = Palette.Muted,
+        )
+    }
+}
 
 /** The current look and the way into changing it. */
 @Composable

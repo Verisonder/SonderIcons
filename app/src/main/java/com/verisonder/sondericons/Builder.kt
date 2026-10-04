@@ -177,12 +177,19 @@ class Builder(private val ctx: Context) {
     }
 
     private fun resultFresh(pkg: String, base: Base): Result {
+        // [pkg] is an entry key: a package, or "package/activity" for an app's extra entries
+        val entry = entryOf(pkg)
+        val themedName = when {
+            entry != null && entry.file in base.themed -> entry.file
+            pkg.substringBefore('/') in base.themed -> pkg.substringBefore('/')
+            else -> null
+        }
         val target = (base.target * Prefs.scale(ctx, pkg) * Prefs.globalScale(ctx)).toInt()
         val t = Prefs.tuning(ctx, pkg)
         return when (Prefs.mode(ctx, pkg)) {
-            Prefs.Mode.THEME -> Result(base.themeIcon(pkg), Kind.THEME,
-                if (pkg in base.themed) "Designed icon" else "Left to the theme")
-            Prefs.Mode.LETTER -> Result(GlyphEngine.letter(label(pkg), base.pattern, target, t, base.glyph), Kind.CUSTOM, "First letter of its name")
+            Prefs.Mode.THEME -> Result(themedName?.let { base.themeIcon(it) }, Kind.THEME,
+                if (themedName != null) "Designed icon" else "Left to the theme")
+            Prefs.Mode.LETTER -> Result(GlyphEngine.letter(entry?.label ?: label(pkg), base.pattern, target, t, base.glyph), Kind.CUSTOM, "First letter of its name")
             Prefs.Mode.CUSTOM -> {
                 val f = Prefs.customFile(ctx, pkg)
                 val b = if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
@@ -192,9 +199,10 @@ class Builder(private val ctx: Context) {
                 else Result(null, Kind.MISSING, "That image has no clear shape. Try one with a transparent background.")
             }
             Prefs.Mode.AUTO -> {
-                if (pkg in base.themed) return Result(base.themeIcon(pkg), Kind.THEME, "Designed icon")
+                if (themedName != null) return Result(base.themeIcon(themedName), Kind.THEME, "Designed icon")
                 val la = ctx.getSystemService(LauncherApps::class.java)
-                val info = la.getActivityList(pkg, Process.myUserHandle()).firstOrNull()
+                val info = la.getActivityList(pkg.substringBefore('/'), Process.myUserHandle())
+                    .firstOrNull { entry == null || it.componentName.className == entry.cls }
                     ?: return Result(null, Kind.MISSING, "Not on the home screen")
                 val (mask, src) = GlyphEngine.pick(GlyphEngine.layersOf(rawIcon(info.activityInfo) ?: info.getIcon(0)), t)
                 if (mask == null) Result(null, Kind.MISSING, "No clear shape found. Pick an image for it.")
@@ -225,13 +233,44 @@ class Builder(private val ctx: Context) {
 
     /** The app's own icon, for the sheet. */
     fun appIcon(pkg: String): Bitmap? = runCatching {
+        val e = entryOf(pkg)
         val ai = ctx.getSystemService(LauncherApps::class.java)
-            .getActivityList(pkg, Process.myUserHandle()).firstOrNull()?.activityInfo
-        val d = ai?.let { rawIcon(it) } ?: ctx.packageManager.getApplicationIcon(pkg)
+            .getActivityList(pkg.substringBefore('/'), Process.myUserHandle())
+            .firstOrNull { e == null || it.componentName.className == e.cls }?.activityInfo
+        val d = ai?.let { rawIcon(it) } ?: ctx.packageManager.getApplicationIcon(pkg.substringBefore('/'))
         Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888).also { b ->
             d.setBounds(0, 0, 192, 192); d.draw(android.graphics.Canvas(b))
         }
     }.getOrNull()
+
+    /**
+     * One launcher entry. An app's first entry is keyed by its package; any further entries
+     * (a second home-screen icon, an alias) by "package/activity". [file] is the name
+     * HyperOS looks the icon up by: the activity name when it starts with the package,
+     * otherwise "package#activity".
+     */
+    class Entry(val key: String, val pkg: String, val cls: String, val label: String, val primary: Boolean) {
+        val file: String get() = if (cls.startsWith(pkg)) cls else "$pkg#$cls"
+    }
+
+    fun entries(): List<Entry> {
+        val list = ctx.getSystemService(LauncherApps::class.java).getActivityList(null, Process.myUserHandle())
+        val out = ArrayList<Entry>()
+        list.groupBy { it.applicationInfo.packageName }.forEach { (pkg, acts) ->
+            acts.forEachIndexed { i, a ->
+                out += Entry(if (i == 0) pkg else "$pkg/${a.componentName.className}", pkg, a.componentName.className,
+                    a.label?.toString() ?: pkg, i == 0)
+            }
+        }
+        return out.sortedBy { it.label.lowercase() }
+    }
+
+    private fun entryOf(key: String): Entry? {
+        val pkg = key.substringBefore('/')
+        val acts = ctx.getSystemService(LauncherApps::class.java).getActivityList(pkg, Process.myUserHandle())
+        val a = if ('/' in key) acts.firstOrNull { it.componentName.className == key.substringAfter('/') } else acts.firstOrNull()
+        return a?.let { Entry(key, pkg, it.componentName.className, it.label?.toString() ?: pkg, '/' !in key) }
+    }
 
     fun launchablePackages(): List<String> =
         ctx.getSystemService(LauncherApps::class.java)
@@ -250,22 +289,31 @@ class Builder(private val ctx: Context) {
         val base = try { loadBase(theme) } catch (e: Unsupported) { return Report(0, emptyList(), e.message) }
 
         val made = LinkedHashMap<String, ByteArray>(); val needs = ArrayList<String>()
-        val pkgs = launchablePackages()
-        pkgs.forEachIndexed { i, pkg ->
-            progress("Drawing ${i + 1} of ${pkgs.size}")
-            val r = runCatching { resultFor(pkg, base) }.getOrNull()
+        val all = entries()
+        all.forEachIndexed { i, e ->
+            progress("Drawing ${i + 1} of ${all.size}")
+            val r = runCatching { resultFor(e.key, base) }.getOrNull()
             when (r?.kind) {
-                Kind.DRAWN, Kind.CUSTOM -> made[pkg] = png(r.bitmap!!)
-                Kind.MISSING -> needs += pkg
+                Kind.DRAWN, Kind.CUSTOM -> {
+                    val bytes = png(r.bitmap!!)
+                    // the activity's own name is looked up first, so an app showing an
+                    // alias or a second icon still finds this; the package name catches the rest
+                    made[e.file] = bytes
+                    if (e.primary) made[e.pkg] = bytes
+                }
+                Kind.MISSING -> needs += e.key
                 else -> {}
             }
         }
+
+        progress("Shortcuts")
+        val shortcuts = runCatching { Shortcuts.entries(ctx, base) }.getOrDefault(emptyMap())
 
         progress("Drawing quick toggles")
         val toggles = runCatching { QuickToggles.entries(ctx, base).mapValues { png(it.value) } }.getOrDefault(emptyMap())
 
         progress("Writing icons")
-        val zip = rebuild(base, made, toggles)
+        val zip = rebuild(base, made, toggles + shortcuts)
         val stage = ThemeStore.stage(ctx)
         val mrc = File(stage, "$own.mrc").apply { writeBytes(zip) }
         val sha = ThemeStore.sha1(zip)
